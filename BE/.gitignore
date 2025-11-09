@@ -1,0 +1,9 @@
+runs/
+basketball_training/
+basketball-detection-srfkd-1/
+processed/
+uploads/
+yolo11s.pt
+yolo11n.pt
+yolo11m.pt
+
