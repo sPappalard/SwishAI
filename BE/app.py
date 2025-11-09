@@ -34,6 +34,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 PROCESSED_DIR.mkdir(exist_ok=True)
 
 processing_status = {}
+stop_flags = {}
 
 # ==================== CARICA MODELLO ====================
 print("🔄 Loading custom trained model...")
@@ -568,6 +569,8 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
             }
         }
         
+        stop_flags[file_id] = False
+
         print(f"\n{'='*60}")
         print(f"🎬 Processing video {file_id}")
         print(f"   Mode: {'TEST (15s)' if test_mode else f'FULL (max {MAX_DURATION}s)'}")
@@ -579,6 +582,11 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
         print(f"{'='*60}\n")
         
         while cap.isOpened() and frame_count < max_frames:
+            # Controlla se è stato richiesto lo stop
+            if stop_flags.get(file_id, False):
+                print(f"⚠️  Processing stopped by user at frame {frame_count}/{max_frames}")
+                break
+            
             ret, frame = cap.read()
             if not ret:
                 break
@@ -682,6 +690,42 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
                 pct = processing_status[file_id]['percentage']
                 print(f"⏳ Progress: {frame_count}/{max_frames} frames ({pct}%) | Shots: {stats.shots_attempted} | Baskets: {stats.baskets_made}")
         
+        # Gestisci stop vs completamento normale
+        was_stopped = stop_flags.get(file_id, False)
+        
+        if was_stopped:
+            # Processing interrotto dall'utente
+            cap.release()
+            out.release()
+            
+            # Cleanup file temporaneo
+            if output_path.exists():
+                output_path.unlink()
+            
+            # Aggiorna status
+            processing_status[file_id] = {
+                "status": "stopped",
+                "progress": frame_count,
+                "total": max_frames,
+                "percentage": int((frame_count / max_frames) * 100),
+                "stats": {
+                    "shots": stats.shots_attempted,
+                    "baskets": stats.baskets_made,
+                    "percentage": stats.get_percentage()
+                },
+                "message": f"Processing stopped at frame {frame_count}/{max_frames}"
+            }
+            
+            # Cleanup flag
+            if file_id in stop_flags:
+                del stop_flags[file_id]
+            
+            print(f"\n{'='*60}")
+            print(f"⚠️  Video {file_id} processing STOPPED by user")
+            print(f"   Frames processed: {frame_count}/{max_frames}")
+            print(f"{'='*60}\n")
+            return
+
         # Schermata finale (5 secondi)
         final_screen = draw_final_stats_screen(width, height, stats, frame_count, fps)
         final_frames = fps * 5  # 5 secondi
@@ -691,6 +735,10 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
         cap.release()
         out.release()
         
+        # Cleanup flag
+        if file_id in stop_flags:
+            del stop_flags[file_id]
+
         processing_status[file_id].update({
             "status": "completed",
             "progress": frame_count,
@@ -741,6 +789,29 @@ async def process_video(file_id: str, test_mode: bool = False):
         "test_mode": test_mode
     }
 
+@app.post("/stop/{file_id}")
+async def stop_processing(file_id: str):
+    """Stop video processing"""
+    if file_id not in processing_status:
+        raise HTTPException(404, "Video processing not found")
+    
+    current_status = processing_status[file_id].get("status")
+    
+    if current_status != "processing":
+        raise HTTPException(400, f"Cannot stop: video is {current_status}")
+    
+    # Imposta flag di stop
+    stop_flags[file_id] = True
+    
+    print(f"🛑 Stop requested for video {file_id}")
+    
+    return {
+        "file_id": file_id,
+        "status": "stop_requested",
+        "message": "Processing will stop at next frame"
+    }
+
+
 @app.get("/download/{file_id}")
 async def download_video(file_id: str):
     """Download processed video"""
@@ -766,6 +837,11 @@ async def clear_video(file_id: str):
         deleted_count += 1
     if file_id in processing_status:
         del processing_status[file_id]
+    
+    # NUOVO: Cleanup flag di stop
+    if file_id in stop_flags:
+        del stop_flags[file_id]
+    
     return {"status": "cleared", "files_deleted": deleted_count}
 
 @app.get("/health")

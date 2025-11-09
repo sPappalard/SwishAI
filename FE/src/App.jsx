@@ -10,6 +10,7 @@ export default function App() {
   const [progress, setProgress] = useState({ current: 0, total: 0, percentage: 0 });
   const fileInputRef = useRef(null);
   const pollingInterval = useRef(null);
+  const [showStopModal, setShowStopModal] = useState(false);
 
   const API_URL = 'http://localhost:8000';
 
@@ -74,6 +75,14 @@ export default function App() {
           clearInterval(pollingInterval.current);
           setStatus('completed');
           setProgress({ current: data.total, total: data.total, percentage: 100 });
+        } else if (data.status === 'stopped') {  // NUOVO
+        clearInterval(pollingInterval.current);
+        setStatus('stopped');
+        setProgress({
+          current: data.progress,
+          total: data.total,
+          percentage: data.percentage || 0
+        });
         } else if (data.status === 'processing') {
           setProgress({
             current: data.progress,
@@ -103,6 +112,25 @@ export default function App() {
     } catch (err) {
       alert('Processing failed: ' + err.message);
       setStatus('uploaded');
+    }
+  };
+
+  const stopProcessing = async () => {
+    if (!fileId) return;
+    
+    try {
+      await fetch(`${API_URL}/stop/${fileId}`, { method: 'POST' });
+      
+      // Ferma il polling
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+      }
+      
+      setStatus('stopped');
+      setShowStopModal(false); // Chiudi modale
+    } catch (err) {
+      alert('Failed to stop processing: ' + err.message);
+      setShowStopModal(false);
     }
   };
 
@@ -221,6 +249,15 @@ export default function App() {
                   Frame {progress.current} / {progress.total}
                 </p>
               </div>
+
+              {/*Pulsante Stop */}
+              <button
+                onClick={() => setShowStopModal(true)}
+                className="mt-8 bg-red-500 text-white px-8 py-3 rounded-lg hover:bg-red-600 transition font-semibold flex items-center gap-2 mx-auto"
+              >
+                <span className="text-xl">🛑</span>
+                Stop Processing
+              </button>
             </div>
           ) : status === 'completed' ? (
             <div className="text-center">
@@ -250,9 +287,67 @@ export default function App() {
                 </button>
               </div>
             </div>
+          ) 
+          : status === 'stopped' ? (
+            <div className="text-center">
+              <div className="mb-6">
+                <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-4xl">🛑</span>
+                </div>
+                <h2 className="text-2xl font-bold mb-2">Processing Stopped</h2>
+                <p className="text-gray-600">The video processing was interrupted</p>
+                <p className="text-sm text-gray-500 mt-2">
+                  Processed {progress.current} of {progress.total} frames ({progress.percentage}%)
+                </p>
+              </div>
+              
+              <button
+                onClick={resetApp}
+                className="bg-orange-500 text-white px-8 py-4 rounded-lg hover:bg-orange-600 transition flex items-center gap-2 text-lg font-semibold mx-auto"
+              >
+                <Home className="w-6 h-6" />
+                Start New Video
+              </button>
+            </div>
           ) : null}
         </div>
       </div>
+      {/* NUOVO: Modale conferma stop */}
+      {showStopModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 transform transition-all">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-4xl">⚠️</span>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                Stop Processing?
+              </h3>
+              <p className="text-gray-600">
+                Are you sure you want to stop the video processing?
+              </p>
+              <p className="text-sm text-gray-500 mt-2">
+                Progress will be lost and you'll need to start over.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowStopModal(false)}
+                className="flex-1 bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300 transition font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={stopProcessing}
+                className="flex-1 bg-red-500 text-white px-6 py-3 rounded-lg hover:bg-red-600 transition font-semibold"
+              >
+                Yes, Stop
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
