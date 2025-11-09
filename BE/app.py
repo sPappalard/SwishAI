@@ -94,6 +94,10 @@ class BasketballStats:
         self.last_shot_frame = -self.shot_cooldown_frames
         self.last_basket_frame = -self.basket_cooldown_frames
         self.basket_animation_frames = deque(maxlen=self.basket_animation_frames_duration)
+
+        #Salva posizione canestro per animazione
+        self.basket_position = None  # (x, y) del centro del canestro
+        self.last_known_basket_position = None  #ultima posizione nota
         
         print(f"📊 Stats Config (FPS={fps}):")
         print(f"   Shot cooldown: {SHOT_COOLDOWN_SECONDS}s = {self.shot_cooldown_frames} frames")
@@ -108,7 +112,7 @@ class BasketballStats:
             return True
         return False
     
-    def register_basket(self, current_frame):
+    def register_basket(self, current_frame, basket_position=None):
         """Registra un canestro se è passato abbastanza tempo"""
         if current_frame - self.last_basket_frame >= self.basket_cooldown_frames:
             # FIX: Se NON c'è stato un tiro RECENTE (entro una finestra temporale ragionevole), conta anche il tiro
@@ -123,6 +127,10 @@ class BasketballStats:
             
             self.baskets_made += 1
             self.last_basket_frame = current_frame
+
+            # Salva posizione del canestro
+            self.basket_position = basket_position
+
             # Attiva animazione
             self.basket_animation_frames = deque(maxlen=self.basket_animation_frames_duration)
             for i in range(self.basket_animation_frames_duration):
@@ -201,8 +209,13 @@ async def get_status(file_id: str):
         return {"status": "not_found", "progress": 0, "total": 0}
     return processing_status[file_id]
 
-def draw_basket_animation(frame, width, height, progress):
-    """Disegna animazione del canestro con effetti dinamici moderni"""
+def draw_basket_animation(frame, stats, progress):
+    """Disegna animazione semplice del canestro con cerchi concentrici"""
+    if stats.basket_position is None:
+        return  # Nessuna posizione salvata, non disegna nulla
+    
+    center_x, center_y = stats.basket_position
+    
     # Effetto di fade in/out smooth
     if progress < 0.15:
         alpha = progress / 0.15
@@ -213,73 +226,35 @@ def draw_basket_animation(frame, width, height, progress):
     
     overlay = frame.copy()
     
-    # Particelle moderne con trail
-    num_particles = 30
-    for i in range(num_particles):
-        angle = (i / num_particles) * 2 * np.pi
-        base_radius = 120
-        radius = base_radius - (progress * base_radius * 0.8)
-        
-        # Movimento con easing
-        ease_progress = 1 - (1 - progress) ** 3
-        x = int(width // 2 + np.cos(angle) * radius)
-        y = int(height // 3 + np.sin(angle) * radius * 0.5 + ease_progress * 250)
-        
-        # Particelle sfumate
-        size = int(8 * (1 - progress) + 3)
-        particle_alpha = (1 - progress) * 0.8
-        
-        # Glow effect
-        for glow_size in range(size + 4, size, -2):
-            glow_alpha = particle_alpha * 0.3
-            cv2.circle(overlay, (x, y), glow_size, (0, 255, 255), -1)
-        
-        cv2.circle(overlay, (x, y), size, (0, 255, 255), -1)
-    
-    # Anelli espansivi moderni
-    for i in range(4):
-        delay = i * 0.15
+    # Cerchi concentrici che si espandono
+    num_rings = 4
+    for i in range(num_rings):
+        delay = i * 0.1  # Ritardo tra un cerchio e l'altro
         local_progress = max(0, min(1, (progress - delay) / (1 - delay)))
         
         if local_progress > 0:
-            radius = int(60 + local_progress * 180)
-            thickness = max(1, int(6 * (1 - local_progress)))
-            ring_alpha = (1 - local_progress) * 0.6
+            # Raggio che cresce
+            max_radius = 100  # Raggio massimo più piccolo
+            radius = int(20 + local_progress * max_radius)
             
-            # Doppio anello per depth
-            cv2.circle(overlay, (width // 2, height // 3), radius, (0, 255, 255), thickness)
-            cv2.circle(overlay, (width // 2, height // 3), radius + 3, (255, 255, 255), 1)
+            # Spessore che diminuisce
+            thickness = max(2, int(8 * (1 - local_progress)))
+            
+            # Trasparenza che diminuisce
+            ring_alpha = (1 - local_progress) * alpha * 0.8
+            
+            # Disegna cerchio giallo/oro
+            color = (0, 215, 255)  # Gold/Yellow
+            cv2.circle(overlay, (center_x, center_y), radius, color, thickness)
     
-    # Testo moderno con shadow e glow
-    scale = 2.5 + np.sin(progress * np.pi * 3) * 0.2
-    text = "CANESTRO!"
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    thickness = 5
-    
-    (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-    text_x = width // 2 - tw // 2
-    text_y = height // 3 - 20
-    
-    # Glow multiplo
-    for glow in range(8, 0, -2):
-        glow_alpha = 0.15
-        cv2.putText(overlay, text, (text_x, text_y),
-                    font, scale, (0, 255, 255), thickness + glow)
-    
-    # Shadow
-    cv2.putText(overlay, text, (text_x + 3, text_y + 3),
-                font, scale, (0, 0, 0), thickness + 2)
-    
-    # Testo principale
-    cv2.putText(overlay, text, (text_x, text_y),
-                font, scale, (0, 255, 255), thickness)
-    
-    # Outline bianco sottile
-    cv2.putText(overlay, text, (text_x, text_y),
-                font, scale, (255, 255, 255), 2)
+    # Piccolo cerchio centrale che pulsa
+    pulse_scale = 1.0 + np.sin(progress * np.pi * 4) * 0.3
+    inner_radius = int(15 * pulse_scale)
+    cv2.circle(overlay, (center_x, center_y), inner_radius, (0, 255, 255), -1)
+    cv2.circle(overlay, (center_x, center_y), inner_radius, (255, 255, 255), 2)
     
     # Blend con alpha
-    cv2.addWeighted(overlay, alpha * 0.8, frame, 1 - alpha * 0.4, 0, frame)
+    cv2.addWeighted(overlay, alpha * 0.7, frame, 1 - alpha * 0.3, 0, frame)
 
 def draw_stats_overlay(frame, stats, width, height):
     """Disegna overlay statistiche moderno e professionale"""
@@ -621,6 +596,9 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
                 imgsz=640
             )
             
+            #traccia posizione canestro
+            basket_center_position = None  
+
             # Processa detections
             if results[0].boxes is not None and len(results[0].boxes) > 0:
                 for box in results[0].boxes:
@@ -641,13 +619,20 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
                     xyxy = box.xyxy[0]
                     track_id = int(box.id[0]) if box.id is not None else None
                     
-                    # Registra eventi
+                    # Se rilevi il canestro (classe 3), salva la sua posizione centrale
+                    if cls == 3:  # basket
+                        x1, y1, x2, y2 = map(int, xyxy)
+                        basket_center_position = ((x1 + x2) // 2, (y1 + y2) // 2)
+                        stats.last_known_basket_position = basket_center_position  # aggiorna ultima posizione nota
+                    
                     if cls == 4:  # player-shooting
                         if stats.register_shot(frame_count):
                             print(f"🏀 SHOT #{stats.shots_attempted} at frame {frame_count}")
                     
                     if cls == 1:  # ball-in-basket
-                        if stats.register_basket(frame_count):
+                        #usa posizione corrente o ultima nota
+                        position_to_use = basket_center_position if basket_center_position else stats.last_known_basket_position
+                        if stats.register_basket(frame_count, position_to_use):
                             print(f"🎯 BASKET #{stats.baskets_made} at frame {frame_count} - {stats.get_percentage():.1f}%")
                     
                     draw_detection(annotated, xyxy, cls, conf, track_id)
@@ -661,7 +646,7 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
             # Animazione canestro
             if stats.is_animating(frame_count):
                 progress = stats.get_animation_progress(frame_count)
-                draw_basket_animation(annotated, width, height, progress)
+                draw_basket_animation(annotated, stats, progress)  
             
             # Info frame
             info_text = f"Frame: {frame_count+1}/{max_frames}"
