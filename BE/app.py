@@ -111,6 +111,16 @@ class BasketballStats:
     def register_basket(self, current_frame):
         """Registra un canestro se è passato abbastanza tempo"""
         if current_frame - self.last_basket_frame >= self.basket_cooldown_frames:
+            # FIX: Se NON c'è stato un tiro RECENTE (entro una finestra temporale ragionevole), conta anche il tiro
+            frames_since_last_shot = current_frame - self.last_shot_frame
+            
+            # Se l'ultimo tiro è stato rilevato MOLTO tempo fa (oltre il doppio del cooldown)
+            # significa che il tiro attuale non è stato rilevato
+            if frames_since_last_shot > (self.shot_cooldown_frames * 2):
+                self.shots_attempted += 1
+                self.last_shot_frame = current_frame
+                print(f"   ⚠️  Canestro senza tiro rilevato - aggiunto tiro automatico")
+            
             self.baskets_made += 1
             self.last_basket_frame = current_frame
             # Attiva animazione
@@ -619,10 +629,10 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
                     
                     min_conf = {
                         0: 0.6,
-                        1: 0.5,
+                        1: 0.25,
                         2: 0.7,
                         3: 0.7,
-                        4: 0.75,
+                        4: 0.77,
                     }
                     
                     if conf < min_conf.get(cls, 0.3):
