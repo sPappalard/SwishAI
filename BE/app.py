@@ -18,6 +18,13 @@ import os
 from dotenv import load_dotenv
 from collections import deque
 
+from enum import Enum
+
+class ProcessingMode(str, Enum):
+    STATS_ONLY = "stats_only"
+    STATS_EFFECTS = "stats_effects"
+    FULL_TRACKING = "full_tracking"
+
 load_dotenv()
 
 app = FastAPI()
@@ -365,143 +372,102 @@ def draw_stats_overlay(frame, stats, width, height):
                 (255, 255, 255), 1)
 
 def draw_final_stats_screen(width, height, stats, total_frames, fps):
-    """Crea schermata finale moderna e professionale"""
+    """Crea schermata finale minimal e chiara con tabella statistiche"""
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     
-    # Background gradiente moderno (scuro elegante)
+    # Background gradiente scuro elegante
     for i in range(height):
-        intensity_r = int(10 + (i / height) * 15)
-        intensity_g = int(12 + (i / height) * 18)
-        intensity_b = int(15 + (i / height) * 20)
-        frame[i, :] = [intensity_b, intensity_g, intensity_r]
+        intensity = int(15 + (i / height) * 10)
+        frame[i, :] = [intensity, intensity, intensity]
     
-    # Overlay scuro centrale per contrast
-    overlay_margin = 100
-    cv2.rectangle(frame,
-                  (overlay_margin, overlay_margin),
-                  (width - overlay_margin, height - overlay_margin),
-                  (0, 0, 0), -1)
-    
-    # Blend overlay
-    overlay_alpha = 0.6
-    overlay_region = frame[overlay_margin:height-overlay_margin, overlay_margin:width-overlay_margin]
-    frame[overlay_margin:height-overlay_margin, overlay_margin:width-overlay_margin] = \
-        cv2.addWeighted(overlay_region, 1-overlay_alpha, 
-                       np.zeros_like(overlay_region), overlay_alpha, 0)
-    
-    # Bordo accent moderno
-    cv2.rectangle(frame,
-                  (overlay_margin, overlay_margin),
-                  (width - overlay_margin, height - overlay_margin),
-                  (0, 200, 255), 3)
-    
-    # Linea accent superiore
-    cv2.line(frame,
-             (overlay_margin, overlay_margin),
-             (width - overlay_margin, overlay_margin),
-             (0, 255, 255), 6)
-    
-    # Titolo principale moderno
-    title = "STATISTICHE FINALI"
+    # Titolo principale
+    title = "FINAL STATISTICS"
     font = cv2.FONT_HERSHEY_SIMPLEX
-    title_scale = 2.2
-    title_thickness = 4
+    title_scale = 2.0
+    title_thickness = 3
     
     (tw, th), _ = cv2.getTextSize(title, font, title_scale, title_thickness)
     title_x = width // 2 - tw // 2
-    title_y = overlay_margin + 80
+    title_y = height // 4
     
-    # Shadow
-    cv2.putText(frame, title, (title_x + 2, title_y + 2),
-                font, title_scale, (0, 0, 0), title_thickness + 2)
-    
-    # Testo principale
     cv2.putText(frame, title, (title_x, title_y),
                 font, title_scale, (255, 255, 255), title_thickness)
     
-    # Accent line sotto titolo
+    # Linea sotto titolo
     line_y = title_y + 20
-    line_width = 300
+    line_width = 250
     cv2.line(frame,
              (width // 2 - line_width // 2, line_y),
              (width // 2 + line_width // 2, line_y),
-             (0, 255, 255), 3)
+             (0, 200, 255), 3)
     
-    # Container statistiche
-    stats_top = line_y + 60
-    stats_height = 320
-    stats_width = 700
-    stats_x = width // 2 - stats_width // 2
-    
-    # Background container
-    cv2.rectangle(frame,
-                  (stats_x, stats_top),
-                  (stats_x + stats_width, stats_top + stats_height),
-                  (30, 30, 30), -1)
-    
-    # Bordo container
-    cv2.rectangle(frame,
-                  (stats_x, stats_top),
-                  (stats_x + stats_width, stats_top + stats_height),
-                  (0, 200, 255), 2)
-    
-    # Statistiche in grid 2x2
-    cell_height = stats_height // 2
-    cell_width = stats_width // 2
-    
+    # Calcola statistiche
     percentage = stats.get_percentage()
     missed = max(0, stats.shots_attempted - stats.baskets_made)
+    duration_min = int(total_frames / fps // 60)
+    duration_sec = int(total_frames / fps % 60)
+    duration_text = f"{duration_min}:{duration_sec:02d}"
     
-    stats_data = [
-        ("TIRI TENTATI", str(stats.shots_attempted), (255, 255, 255), 0, 0),
-        ("CANESTRI", str(stats.baskets_made), (0, 255, 100), 1, 0),
-        ("TIRI SBAGLIATI", str(missed), (100, 150, 255), 0, 1),
-        ("PRECISIONE", f"{percentage:.1f}%", (0, 255, 255), 1, 1)
+    # Tabella statistiche
+    table_data = [
+        ("Shots Attempted", str(stats.shots_attempted)),
+        ("Baskets Made", str(stats.baskets_made)),
+        ("Missed Shots", str(missed)),
+        ("Shooting %", f"{percentage:.1f}%"),
+        ("Video Duration", duration_text)
     ]
     
-    for label, value, color, col, row in stats_data:
-        cell_x = stats_x + col * cell_width
-        cell_y = stats_top + row * cell_height
-        
-        # Separatori
-        if col == 1:
-            cv2.line(frame, (cell_x, cell_y), (cell_x, cell_y + cell_height),
-                    (60, 60, 60), 2)
-        if row == 1:
-            cv2.line(frame, (stats_x, cell_y), (stats_x + stats_width, cell_y),
-                    (60, 60, 60), 2)
-        
-        # Label (piccolo, sopra)
-        label_y = cell_y + 50
-        cv2.putText(frame, label,
-                    (cell_x + 40, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150, 150, 150), 2)
-        
-        # Valore (grande, sotto)
-        value_scale = 2.5
-        value_thickness = 5
-        (vw, vh), _ = cv2.getTextSize(value, cv2.FONT_HERSHEY_SIMPLEX, value_scale, value_thickness)
-        value_x = cell_x + cell_width // 2 - vw // 2
-        value_y = cell_y + cell_height // 2 + 30
-        
-        # Glow effect
-        for i in range(3):
-            cv2.putText(frame, value, (value_x, value_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, value_scale, color, value_thickness + 4 - i)
-        
-        # Valore principale
-        cv2.putText(frame, value, (value_x, value_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, value_scale, color, value_thickness)
+    # Dimensioni tabella
+    table_width = 500
+    table_height = len(table_data) * 60 + 40
+    table_x = width // 2 - table_width // 2
+    table_y = title_y + 80
     
-    # Footer con durata
-    duration = total_frames / fps
-    footer_y = stats_top + stats_height + 50
-    footer_text = f"Durata analisi: {int(duration // 60)}:{int(duration % 60):02d}"
+    # Background tabella
+    cv2.rectangle(frame,
+                  (table_x, table_y),
+                  (table_x + table_width, table_y + table_height),
+                  (30, 30, 30), -1)
     
-    (fw, fh), _ = cv2.getTextSize(footer_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-    cv2.putText(frame, footer_text,
-                (width // 2 - fw // 2, footer_y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (120, 120, 120), 2)
+    # Bordo tabella
+    cv2.rectangle(frame,
+                  (table_x, table_y),
+                  (table_x + table_width, table_y + table_height),
+                  (0, 200, 255), 2)
+    
+    # Header tabella
+    header_height = 40
+    cv2.rectangle(frame,
+                  (table_x, table_y),
+                  (table_x + table_width, table_y + header_height),
+                  (0, 200, 255), -1)
+    
+    cv2.putText(frame, "STATISTIC", (table_x + 20, table_y + 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    cv2.putText(frame, "VALUE", (table_x + table_width - 120, table_y + 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    # Righe tabella
+    for i, (label, value) in enumerate(table_data):
+        row_y = table_y + header_height + (i * 60) + 40
+        
+        # Separatore
+        if i > 0:
+            cv2.line(frame,
+                    (table_x + 10, row_y - 30),
+                    (table_x + table_width - 10, row_y - 30),
+                    (60, 60, 60), 1)
+        
+        # Label
+        cv2.putText(frame, label, (table_x + 20, row_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        
+        # Value (colore speciale per percentuale)
+        value_color = (0, 255, 100) if label == "Shooting %" else (255, 255, 255)
+        (vw, vh), _ = cv2.getTextSize(value, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        value_x = table_x + table_width - vw - 30
+        cv2.putText(frame, value, (value_x, row_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, value_color, 2)
     
     return frame
 
@@ -535,7 +501,7 @@ def draw_detection(frame, box, cls, conf, track_id=None):
         cv2.putText(frame, track_label, (x1, y2 + 20), 
                     font, 0.5, color, 2)
 
-def process_video_thread(file_id: str, input_path: Path, output_path: Path, test_mode: bool):
+def process_video_thread(file_id: str, input_path: Path, output_path: Path, test_mode: bool, processing_mode: str):
     """Thread per processare il video"""
     try:
         cap = cv2.VideoCapture(str(input_path))
@@ -608,6 +574,7 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
             basket_center_position = None  
 
             # Processa detections
+            # Processa detections
             if results[0].boxes is not None and len(results[0].boxes) > 0:
                 for box in results[0].boxes:
                     conf = float(box.conf[0])
@@ -631,19 +598,20 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
                     if cls == 3:  # basket
                         x1, y1, x2, y2 = map(int, xyxy)
                         basket_center_position = ((x1 + x2) // 2, (y1 + y2) // 2)
-                        stats.last_known_basket_position = basket_center_position  # aggiorna ultima posizione nota
+                        stats.last_known_basket_position = basket_center_position
                     
                     if cls == 4:  # player-shooting
                         if stats.register_shot(frame_count):
                             print(f"🏀 SHOT #{stats.shots_attempted} at frame {frame_count}")
                     
                     if cls == 1:  # ball-in-basket
-                        #usa posizione corrente o ultima nota
                         position_to_use = basket_center_position if basket_center_position else stats.last_known_basket_position
                         if stats.register_basket(frame_count, position_to_use):
                             print(f"🎯 BASKET #{stats.baskets_made} at frame {frame_count} - {stats.get_percentage():.1f}%")
                     
-                    draw_detection(annotated, xyxy, cls, conf, track_id)
+                    # NUOVO: Disegna detection solo in FULL_TRACKING mode
+                    if processing_mode == ProcessingMode.FULL_TRACKING:
+                        draw_detection(annotated, xyxy, cls, conf, track_id)
                     
                     class_name = CLASS_NAMES.get(cls, f"Class_{cls}")
                     processing_status[file_id]["detections"][class_name] += 1
@@ -652,9 +620,10 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
             draw_stats_overlay(annotated, stats, width, height)
             
             # Animazione canestro
-            if stats.is_animating(frame_count):
-                progress = stats.get_animation_progress(frame_count)
-                draw_basket_animation(annotated, stats, progress)  
+            if processing_mode in [ProcessingMode.STATS_EFFECTS, ProcessingMode.FULL_TRACKING]:
+                if stats.is_animating(frame_count):
+                    progress = stats.get_animation_progress(frame_count)
+                    draw_basket_animation(annotated, stats, progress)
             
             # Info frame
             info_text = f"Frame: {frame_count+1}/{max_frames}"
@@ -662,13 +631,14 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
             # Legenda
-            legend_y = 30
-            for cls, name in CLASS_NAMES.items():
-                color = CLASS_COLORS[cls]
-                text = f"{name}"
-                cv2.putText(annotated, text, (width - 200, legend_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                legend_y += 25
+            if processing_mode == ProcessingMode.FULL_TRACKING:
+                legend_y = 30
+                for cls, name in CLASS_NAMES.items():
+                    color = CLASS_COLORS[cls]
+                    text = f"{name}"
+                    cv2.putText(annotated, text, (width - 200, legend_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    legend_y += 25
             
             out.write(annotated)
             frame_count += 1
@@ -768,25 +738,32 @@ def process_video_thread(file_id: str, input_path: Path, output_path: Path, test
         print(f"❌ Error processing video {file_id}: {e}")
 
 @app.post("/process/{file_id}")
-async def process_video(file_id: str, test_mode: bool = False):
+async def process_video(file_id: str, test_mode: bool = False, processing_mode: str = "full_tracking"):
     """Start video processing"""
     input_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
     if not input_files:
         raise HTTPException(404, "Video not found")
+    
+    # Valida processing_mode
+    try:
+        mode = ProcessingMode(processing_mode)
+    except ValueError:
+        raise HTTPException(400, f"Invalid processing_mode. Must be one of: {[e.value for e in ProcessingMode]}")
     
     input_path = input_files[0]
     output_path = PROCESSED_DIR / f"{file_id}_processed.mp4"
     
     thread = threading.Thread(
         target=process_video_thread, 
-        args=(file_id, input_path, output_path, test_mode)
+        args=(file_id, input_path, output_path, test_mode, mode.value)
     )
     thread.start()
     
     return {
         "file_id": file_id, 
         "status": "started",
-        "test_mode": test_mode
+        "test_mode": test_mode,
+        "processing_mode": mode.value
     }
 
 @app.post("/stop/{file_id}")

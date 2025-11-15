@@ -11,6 +11,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const pollingInterval = useRef(null);
   const [showStopModal, setShowStopModal] = useState(false);
+  const [processingMode, setProcessingMode] = useState('full_tracking');
 
   const API_URL = 'http://localhost:8000';
 
@@ -107,7 +108,7 @@ export default function App() {
     setProgress({ current: 0, total: 0, percentage: 0 });
     
     try {
-      await fetch(`${API_URL}/process/${fileId}?test_mode=${testMode}`, { method: 'POST' });
+      await fetch(`${API_URL}/process/${fileId}?test_mode=${testMode}&processing_mode=${processingMode}`, { method: 'POST' });
       startPolling(fileId);
     } catch (err) {
       alert('Processing failed: ' + err.message);
@@ -143,6 +144,7 @@ export default function App() {
     setFileId(null);
     setStatus('idle');
     setTestMode(false);
+    setProcessingMode('full_tracking'); // NUOVO
     setProgress({ current: 0, total: 0, percentage: 0 });
   };
 
@@ -217,6 +219,28 @@ export default function App() {
                 <label htmlFor="testMode" className="text-gray-700 font-medium">
                   Test mode (process only first 15 seconds)
                 </label>
+              </div>
+
+              {/* NUOVO: Dropdown modalità processamento */}
+              <div className="mb-6 max-w-md mx-auto">
+                <label htmlFor="processingMode" className="block text-sm font-medium text-gray-700 mb-2">
+                  Processing Mode
+                </label>
+                <select
+                  id="processingMode"
+                  value={processingMode}
+                  onChange={(e) => setProcessingMode(e.target.value)}
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white text-gray-900 font-medium"
+                >
+                  <option value="stats_only">Stats Only</option>
+                  <option value="stats_effects">Stats + Basket Effects</option>
+                  <option value="full_tracking">Full Tracking</option>
+                </select>
+                <p className="mt-2 text-sm text-gray-500">
+                  {processingMode === 'stats_only' && '📊 Only statistics overlay and final summary'}
+                  {processingMode === 'stats_effects' && '✨ Statistics + basket animation effects'}
+                  {processingMode === 'full_tracking' && '🎯 Complete tracking with all detections'}
+                </p>
               </div>
 
               <button
