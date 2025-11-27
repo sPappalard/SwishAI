@@ -1,886 +1,463 @@
 """
-🏀 BASKETBALL TRACKER API with STATS
-Tracks 5 classes with different colors and calculates shooting statistics
+🏀 BASKETBALL TRACKER API - REFACTORED & OPTIMIZED
+==================================================
+Modular structure for better readability and performance.
+All comments and logs are in English.
+Includes explicit Processing Modes and Auto-Cleanup.
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pathlib import Path
 import shutil
 import uuid
 import uvicorn
 import threading
 import os
-from dotenv import load_dotenv
 from collections import deque
+from enum import Enum
+import time
 
-load_dotenv()
+# ==================== CONFIGURATION ====================
+class Config:
+    """Centralized configuration for the application."""
+    # Paths
+    UPLOAD_DIR = Path("uploads")
+    PROCESSED_DIR = Path("processed")
+    MODEL_PATH = Path("basketball_training/yolo11s_5classes/weights/best.pt")
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware, 
-    allow_origins=["*"], 
-    allow_methods=["*"], 
-    allow_headers=["*"]
-)
+    # Video Constraints
+    MAX_DURATION_SECONDS = 180  # Max processing limit (3 mins)
+    TEST_MODE_DURATION = 15     # Duration for test mode
 
-UPLOAD_DIR = Path("uploads")
-PROCESSED_DIR = Path("processed")
-UPLOAD_DIR.mkdir(exist_ok=True)
-PROCESSED_DIR.mkdir(exist_ok=True)
+    # Retention Policy
+    RETENTION_SECONDS = 1800    # 30 Minutes: Files older than this are auto-deleted
+    CLEANUP_INTERVAL = 60       # Run cleanup check every 60 seconds
 
+    # Physics & Rules (Time in seconds)
+    SHOT_COOLDOWN = 1.5
+    BASKET_COOLDOWN = 2.0
+    ANIMATION_DURATION = 2.0
+
+    # Confidence Thresholds
+    THRESHOLDS = {
+        0: 0.6,     # Ball
+        1: 0.25,    # Ball in Basket
+        2: 0.7,     # Player
+        3: 0.7,     # Basket
+        4: 0.77     # Player Shooting
+    }
+
+    # Colors (BGR Format for OpenCV)
+    COLORS = {
+        0: (0, 165, 255),    # Ball (Orange)
+        1: (0, 215, 255),    # Ball in Basket (Gold)
+        2: (0, 255, 0),      # Player (Green)
+        3: (0, 0, 255),      # Basket (Red)
+        4: (255, 100, 0),    # Player Shooting (Blue)
+    }
+    
+    CLASSES = {
+        0: "Ball",
+        1: "Ball in Basket",
+        2: "Player",
+        3: "Basket",
+        4: "Player Shooting"
+    }
+
+# Ensure directories exist
+Config.UPLOAD_DIR.mkdir(exist_ok=True)
+Config.PROCESSED_DIR.mkdir(exist_ok=True)
+
+# ==================== ENUMS ====================
+class ProcessingMode(str, Enum):
+    STATS_ONLY = "stats_only"
+    STATS_EFFECTS = "stats_effects"
+    FULL_TRACKING = "full_tracking"
+
+# ==================== GLOBAL STATE ====================
 processing_status = {}
 stop_flags = {}
 
-# ==================== CARICA MODELLO ====================
-print("🔄 Loading custom trained model...")
+# ==================== AI MODEL ====================
+def load_model():
+    """Loads the YOLO model with error handling."""
+    print("🔄 Loading AI Model...")
+    if not Config.MODEL_PATH.exists():
+        raise FileNotFoundError(f"❌ Model not found at {Config.MODEL_PATH}")
+    model = YOLO(str(Config.MODEL_PATH))
+    print("✅ Model loaded successfully!")
+    return model
 
-CUSTOM_MODEL_PATH = Path("basketball_training/yolo11s_5classes/weights/best.pt")
-if not CUSTOM_MODEL_PATH.exists():
-    raise FileNotFoundError(
-        f"❌ Trained model not found at {CUSTOM_MODEL_PATH}\n"
-        f"   Please train the model first using train_basketball_model.py"
-    )
+yolo_model = load_model()
 
-yolo_model = YOLO(str(CUSTOM_MODEL_PATH))
+# ==================== CLEANUP SERVICE ====================
+class AutoCleanup:
+    """Background service to delete old files and free up space."""
+    
+    @staticmethod
+    def start():
+        """Starts the cleanup thread."""
+        thread = threading.Thread(target=AutoCleanup._cleanup_loop, daemon=True)
+        thread.start()
+        print(f"🧹 Auto-Cleanup started. Retention: {Config.RETENTION_SECONDS}s")
 
-print("✅ Model loaded successfully!")
-print(f"📋 Classes: {yolo_model.names}")
+    @staticmethod
+    def _cleanup_loop():
+        """Runs periodically to remove old files."""
+        while True:
+            time.sleep(Config.CLEANUP_INTERVAL)
+            try:
+                now = time.time()
+                deleted_count = 0
+                
+                # 1. Clean Uploads
+                for f in Config.UPLOAD_DIR.iterdir():
+                    if f.is_file() and (now - f.stat().st_mtime) > Config.RETENTION_SECONDS:
+                        try:
+                            f.unlink()
+                            deleted_count += 1
+                        except Exception: pass
 
-# ==================== CONFIGURAZIONE COLORI ====================
-CLASS_COLORS = {
-    0: (0, 165, 255),    # ball - Orange
-    1: (0, 215, 255),    # ball-in-basket - Gold/Yellow
-    2: (0, 255, 0),      # player - Green
-    3: (0, 0, 255),      # basket - Red
-    4: (255, 100, 0),    # player-shooting - Blue
-}
+                # 2. Clean Processed Videos
+                for f in Config.PROCESSED_DIR.iterdir():
+                    if f.is_file() and (now - f.stat().st_mtime) > Config.RETENTION_SECONDS:
+                        try:
+                            f.unlink()
+                            deleted_count += 1
+                        except Exception: pass
 
-CLASS_NAMES = {
-    0: "Ball",
-    1: "Ball in Basket",
-    2: "Player",
-    3: "Basket",
-    4: "Player Shooting"
-}
+                # 3. Clean Memory (Status Dictionary)
+                # Remove keys that haven't been updated in a while (using a simplified heuristic here)
+                # Since we don't timestamp status updates, we'll just check if the file exists on disk.
+                # If file is gone (deleted above), remove status.
+                keys_to_remove = []
+                for file_id in processing_status:
+                    # Check if any file related to this ID still exists
+                    has_files = any(Config.UPLOAD_DIR.glob(f"{file_id}.*")) or \
+                                any(Config.PROCESSED_DIR.glob(f"{file_id}*"))
+                    
+                    if not has_files and processing_status[file_id]['status'] != 'processing':
+                        keys_to_remove.append(file_id)
+                
+                for k in keys_to_remove:
+                    del processing_status[k]
 
-CLASS_THICKNESS = {
-    0: 3,
-    1: 4,
-    2: 2,
-    3: 2,
-    4: 3,
-}
+                if deleted_count > 0:
+                    print(f"🧹 Auto-Cleanup: Removed {deleted_count} old files.")
 
-# ==================== CONFIGURAZIONE STATISTICHE (IN SECONDI) ====================
-SHOT_COOLDOWN_SECONDS = 1.5      # Cooldown tiri (secondi)
-BASKET_COOLDOWN_SECONDS = 2.0    # Cooldown canestri (secondi)
-BASKET_ANIMATION_SECONDS = 2.0   # Durata animazione (secondi)
+            except Exception as e:
+                print(f"⚠️ Cleanup Error: {e}")
 
-class BasketballStats:
-    """Classe per gestire le statistiche di gioco"""
+# ==================== LOGIC CLASSES ====================
+
+class GameStats:
+    """Handles the logic for tracking shots, baskets, and percentages."""
     def __init__(self, fps):
         self.fps = fps
-        # Converti secondi in frame in base al framerate
-        self.shot_cooldown_frames = int(fps * SHOT_COOLDOWN_SECONDS)
-        self.basket_cooldown_frames = int(fps * BASKET_COOLDOWN_SECONDS)
-        self.basket_animation_frames_duration = int(fps * BASKET_ANIMATION_SECONDS)
-        
         self.shots_attempted = 0
         self.baskets_made = 0
+        
+        self.shot_cooldown_frames = int(fps * Config.SHOT_COOLDOWN)
+        self.basket_cooldown_frames = int(fps * Config.BASKET_COOLDOWN)
+        self.anim_duration_frames = int(fps * Config.ANIMATION_DURATION)
+        
         self.last_shot_frame = -self.shot_cooldown_frames
         self.last_basket_frame = -self.basket_cooldown_frames
-        self.basket_animation_frames = deque(maxlen=self.basket_animation_frames_duration)
+        
+        self.basket_position = None
+        self.last_known_basket_pos = None
+        self.animation_frames = deque(maxlen=self.anim_duration_frames)
 
-        #Salva posizione canestro per animazione
-        self.basket_position = None  # (x, y) del centro del canestro
-        self.last_known_basket_position = None  #ultima posizione nota
-        
-        print(f"📊 Stats Config (FPS={fps}):")
-        print(f"   Shot cooldown: {SHOT_COOLDOWN_SECONDS}s = {self.shot_cooldown_frames} frames")
-        print(f"   Basket cooldown: {BASKET_COOLDOWN_SECONDS}s = {self.basket_cooldown_frames} frames")
-        print(f"   Animation duration: {BASKET_ANIMATION_SECONDS}s = {self.basket_animation_frames_duration} frames")
-        
-    def register_shot(self, current_frame):
-        """Registra un tiro se è passato abbastanza tempo"""
-        if current_frame - self.last_shot_frame >= self.shot_cooldown_frames:
+    def register_shot(self, frame_idx):
+        if frame_idx - self.last_shot_frame >= self.shot_cooldown_frames:
             self.shots_attempted += 1
-            self.last_shot_frame = current_frame
+            self.last_shot_frame = frame_idx
             return True
         return False
-    
-    def register_basket(self, current_frame, basket_position=None):
-        """Registra un canestro se è passato abbastanza tempo"""
-        if current_frame - self.last_basket_frame >= self.basket_cooldown_frames:
-            # FIX: Se NON c'è stato un tiro RECENTE (entro una finestra temporale ragionevole), conta anche il tiro
-            frames_since_last_shot = current_frame - self.last_shot_frame
-            
-            # Se l'ultimo tiro è stato rilevato MOLTO tempo fa (oltre il doppio del cooldown)
-            # significa che il tiro attuale non è stato rilevato
-            if frames_since_last_shot > (self.shot_cooldown_frames * 2):
+
+    def register_basket(self, frame_idx, position=None):
+        if frame_idx - self.last_basket_frame >= self.basket_cooldown_frames:
+            if (frame_idx - self.last_shot_frame) > (self.shot_cooldown_frames * 2):
                 self.shots_attempted += 1
-                self.last_shot_frame = current_frame
-                print(f"   ⚠️  Canestro senza tiro rilevato - aggiunto tiro automatico")
-            
+                self.last_shot_frame = frame_idx
+                # print(f"   ⚠️  Basket detected without shot. Auto-added shot.")
+
             self.baskets_made += 1
-            self.last_basket_frame = current_frame
-
-            # Salva posizione del canestro
-            self.basket_position = basket_position
-
-            # Attiva animazione
-            self.basket_animation_frames = deque(maxlen=self.basket_animation_frames_duration)
-            for i in range(self.basket_animation_frames_duration):
-                self.basket_animation_frames.append(current_frame + i)
+            self.last_basket_frame = frame_idx
+            self.basket_position = position
+            
+            self.animation_frames.clear()
+            for i in range(self.anim_duration_frames):
+                self.animation_frames.append(frame_idx + i)
             return True
         return False
-    
-    def get_percentage(self):
-        """Calcola la percentuale di tiro"""
-        if self.shots_attempted == 0:
-            return 0.0
+
+    @property
+    def accuracy(self):
+        if self.shots_attempted == 0: return 0.0
         return (self.baskets_made / self.shots_attempted) * 100
-    
-    def is_animating(self, current_frame):
-        """Controlla se l'animazione canestro è attiva"""
-        return current_frame in self.basket_animation_frames
-    
+
     def get_animation_progress(self, current_frame):
-        """Ottieni il progresso dell'animazione (0.0 a 1.0)"""
-        if not self.is_animating(current_frame):
-            return 0.0
-        frames_since_basket = current_frame - self.last_basket_frame
-        return min(1.0, frames_since_basket / self.basket_animation_frames_duration)
+        if current_frame not in self.animation_frames: return 0.0
+        delta = current_frame - self.last_basket_frame
+        return min(1.0, delta / self.anim_duration_frames)
 
-# ==================== CONFIGURAZIONE ====================
-MAX_DURATION = 180  # 3 minuti max di PROCESSING (anche se il video è più lungo)
-TEST_MODE_DURATION = 15
 
-# ==================== ENDPOINTS ====================
+class Visualizer:
+    """Handles all drawing operations on the video frames."""
+    
+    @staticmethod
+    def draw_basket_effect(frame, center_pos, progress):
+        if not center_pos: return
+        cx, cy = center_pos
+        alpha = 1.0
+        if progress < 0.15: alpha = progress / 0.15
+        elif progress > 0.85: alpha = (1.0 - progress) / 0.15
+        
+        overlay = frame.copy()
+        for i in range(4):
+            delay = i * 0.1
+            local_prog = max(0, min(1, (progress - delay) / (1 - delay)))
+            if local_prog > 0:
+                radius = int(20 + local_prog * 100)
+                thickness = max(2, int(8 * (1 - local_prog)))
+                cv2.circle(overlay, (cx, cy), radius, (0, 215, 255), thickness)
+        
+        pulse = 1.0 + np.sin(progress * np.pi * 4) * 0.3
+        cv2.circle(overlay, (cx, cy), int(15 * pulse), (0, 255, 255), -1)
+        cv2.addWeighted(overlay, alpha * 0.7, frame, 1 - alpha * 0.3, 0, frame)
+
+    @staticmethod
+    def draw_hud(frame, stats, w, h):
+        panel_h, panel_w = 100, min(700, w - 30)
+        x, y = 15, h - panel_h - 15
+        
+        sub_img = frame[y:y+panel_h, x:x+panel_w]
+        white_rect = np.full(sub_img.shape, 30, dtype=np.uint8)
+        res = cv2.addWeighted(sub_img, 0.2, white_rect, 0.8, 0)
+        frame[y:y+panel_h, x:x+panel_w] = res
+        cv2.rectangle(frame, (x, y), (x+panel_w, y+panel_h), (0, 200, 255), 2)
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        def draw_stat_col(offset_x, label, value, color=(255,255,255)):
+            cv2.putText(frame, label, (x + offset_x, y + 30), font, 0.5, (180,180,180), 1)
+            cv2.putText(frame, str(value), (x + offset_x, y + 70), font, 1.3, color, 3)
+
+        col_w = panel_w // 3
+        draw_stat_col(20, "SHOTS", stats.shots_attempted)
+        draw_stat_col(20 + col_w, "BASKETS", stats.baskets_made, (0, 255, 100))
+        
+        acc_x = x + 2 * col_w + 20
+        cv2.putText(frame, "ACCURACY", (acc_x, y + 30), font, 0.5, (180,180,180), 1)
+        cv2.putText(frame, f"{stats.accuracy:.1f}%", (acc_x, y + 70), font, 1.0, (0, 255, 255), 2)
+        
+        bar_x, bar_y = acc_x, y + 80
+        bar_w = col_w - 40
+        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + 8), (60,60,60), -1)
+        fill_w = int((stats.accuracy / 100) * bar_w)
+        if fill_w > 0:
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + 8), (0, 200, 255), -1)
+
+    @staticmethod
+    def draw_final_screen(w, h, stats, total_frames, fps):
+        canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        for i in range(h): canvas[i, :] = [(20 + i/h*20)]*3
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        
+        cv2.putText(canvas, "PERFORMANCE SUMMARY", (w//2 - 250, h//4), font, 1.5, (255,255,255), 3)
+        data = [
+            ("Total Shots", str(stats.shots_attempted)),
+            ("Baskets Made", str(stats.baskets_made)),
+            ("Missed Shots", str(stats.shots_attempted - stats.baskets_made)),
+            ("Accuracy", f"{stats.accuracy:.1f}%"),
+            ("Duration", f"{int(total_frames/fps)} sec")
+        ]
+        start_y = h//3
+        for i, (label, val) in enumerate(data):
+            y_pos = start_y + (i * 60)
+            cv2.putText(canvas, label, (w//2 - 200, y_pos), font, 1.0, (200,200,200), 2)
+            cv2.putText(canvas, val, (w//2 + 100, y_pos), font, 1.0, (0,255,100) if "%" in val else (255,255,255), 2)
+            cv2.line(canvas, (w//2 - 200, y_pos + 20), (w//2 + 200, y_pos + 20), (50,50,50), 1)
+        return canvas
+
+class VideoProcessor:
+    """Manages the video processing loop."""
+    def __init__(self, file_id, input_path, output_path, test_mode, mode: ProcessingMode):
+        self.file_id = file_id
+        self.input_path = input_path
+        self.output_path = output_path
+        self.test_mode = test_mode
+        self.mode = mode
+        
+    def run(self):
+        try:
+            cap = cv2.VideoCapture(str(self.input_path))
+            if not cap.isOpened(): raise RuntimeError("Could not open video file.")
+                
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            if self.test_mode: max_frames = int(fps * Config.TEST_MODE_DURATION)
+            else: max_frames = min(total_frames, int(fps * Config.MAX_DURATION_SECONDS))
+            
+            writer = cv2.VideoWriter(str(self.output_path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+            stats = GameStats(fps)
+            frame_idx = 0
+            
+            self._update_status("processing", 0, max_frames, stats)
+            print(f"🎬 Processing {self.file_id} | Mode: {self.mode.value} | Frames: {max_frames}")
+
+            while cap.isOpened() and frame_idx < max_frames:
+                if stop_flags.get(self.file_id, False):
+                    print(f"🛑 Stopped by user.")
+                    break
+                    
+                success, frame = cap.read()
+                if not success: break
+                
+                annotated = frame.copy()
+                
+                # --- TRACKING ---
+                results = yolo_model.track(
+                    frame, persist=True, verbose=False, 
+                    conf=0.25, tracker="bytetrack.yaml", imgsz=640
+                )
+                
+                # --- LOGIC ---
+                self._process_detections(results, stats, frame_idx)
+                
+                # --- DRAWING LOGIC BASED ON MODE ---
+                
+                # 1. Boxes (Only in FULL_TRACKING)
+                if self.mode == ProcessingMode.FULL_TRACKING:
+                    self._draw_yolo_boxes(annotated, results)
+                
+                # 2. Effects (In FULL_TRACKING or STATS_EFFECTS)
+                if self.mode in [ProcessingMode.FULL_TRACKING, ProcessingMode.STATS_EFFECTS]:
+                    if stats.get_animation_progress(frame_idx) > 0:
+                        Visualizer.draw_basket_effect(annotated, stats.basket_position, stats.get_animation_progress(frame_idx))
+                
+                # 3. HUD (Always visible in all modes)
+                Visualizer.draw_hud(annotated, stats, w, h)
+                
+                writer.write(annotated)
+                frame_idx += 1
+                
+                if frame_idx % 30 == 0:
+                    self._update_status("processing", frame_idx, max_frames, stats)
+
+            if stop_flags.get(self.file_id, False):
+                self._update_status("stopped", frame_idx, max_frames, stats)
+            else:
+                summary_frame = Visualizer.draw_final_screen(w, h, stats, frame_idx, fps)
+                for _ in range(int(fps * 5)): writer.write(summary_frame)
+                self._update_status("completed", frame_idx, max_frames, stats)
+                print(f"✅ Finished. Acc: {stats.accuracy:.1f}%")
+
+            cap.release()
+            writer.release()
+            if self.file_id in stop_flags: del stop_flags[self.file_id]
+
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            processing_status[self.file_id] = {"status": "error", "message": str(e)}
+
+    def _process_detections(self, results, stats, frame_idx):
+        if not results[0].boxes: return
+        for box in results[0].boxes:
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
+            if conf < Config.THRESHOLDS.get(cls, 0.3): continue
+            
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            center = ((x1+x2)//2, (y1+y2)//2)
+            
+            if cls == 3: stats.last_known_basket_pos = center
+            elif cls == 4: stats.register_shot(frame_idx)
+            elif cls == 1:
+                target_pos = stats.last_known_basket_pos or center
+                stats.register_basket(frame_idx, target_pos)
+
+    def _draw_yolo_boxes(self, frame, results):
+        if not results[0].boxes: return
+        for box in results[0].boxes:
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
+            if conf < Config.THRESHOLDS.get(cls, 0.3): continue
+
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            color = Config.COLORS.get(cls, (255,255,255))
+            label = f"{Config.CLASSES.get(cls)} {conf:.2f}"
+            
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    def _update_status(self, status, current, total, stats):
+        processing_status[self.file_id] = {
+            "status": status,
+            "progress": current,
+            "total": total,
+            "percentage": int((current/total)*100) if total > 0 else 0,
+            "stats": {"shots": stats.shots_attempted, "baskets": stats.baskets_made, "accuracy": stats.accuracy}
+        }
+
+# ==================== FASTAPI APP ====================
+app = FastAPI(title="Basketball AI Tracker")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.on_event("startup")
+def startup_event():
+    """Starts background services on app startup."""
+    AutoCleanup.start()
+
 @app.get("/")
-async def root():
-    return {
-        "message": "Basketball Tracker API with Stats", 
-        "status": "running",
-        "model": str(CUSTOM_MODEL_PATH),
-        "classes": CLASS_NAMES
-    }
+def home(): return {"message": "Basketball AI Tracker is Running", "docs": "/docs"}
 
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
-    """Upload video file"""
-    if not file.content_type.startswith("video/"):
-        raise HTTPException(400, "File must be a video")
-    
+    if not file.content_type.startswith("video/"): raise HTTPException(400, "File must be a video.")
     file_id = str(uuid.uuid4())
     ext = Path(file.filename).suffix
-    input_path = UPLOAD_DIR / f"{file_id}{ext}"
-    
-    with open(input_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    
-    cap = cv2.VideoCapture(str(input_path))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    duration = frame_count / fps if fps > 0 else 0
-    cap.release()
-    
-    # Non bloccare upload di video lunghi, ma avvisa che verrà processato solo fino a 3 min
-    will_be_truncated = duration > MAX_DURATION
-    
-    return {
-        "file_id": file_id, 
-        "filename": file.filename, 
-        "duration": duration,
-        "fps": fps,
-        "frames": int(frame_count),
-        "will_be_truncated": will_be_truncated,
-        "max_processing_duration": MAX_DURATION if will_be_truncated else None,
-        "warning": f"Video will be processed up to {MAX_DURATION}s (first 3 minutes)" if will_be_truncated else None
-    }
-
-@app.get("/status/{file_id}")
-async def get_status(file_id: str):
-    """Get processing status"""
-    if file_id not in processing_status:
-        return {"status": "not_found", "progress": 0, "total": 0}
-    return processing_status[file_id]
-
-def draw_basket_animation(frame, stats, progress):
-    """Disegna animazione semplice del canestro con cerchi concentrici"""
-    if stats.basket_position is None:
-        return  # Nessuna posizione salvata, non disegna nulla
-    
-    center_x, center_y = stats.basket_position
-    
-    # Effetto di fade in/out smooth
-    if progress < 0.15:
-        alpha = progress / 0.15
-    elif progress > 0.85:
-        alpha = (1.0 - progress) / 0.15
-    else:
-        alpha = 1.0
-    
-    overlay = frame.copy()
-    
-    # Cerchi concentrici che si espandono
-    num_rings = 4
-    for i in range(num_rings):
-        delay = i * 0.1  # Ritardo tra un cerchio e l'altro
-        local_progress = max(0, min(1, (progress - delay) / (1 - delay)))
-        
-        if local_progress > 0:
-            # Raggio che cresce
-            max_radius = 100  # Raggio massimo più piccolo
-            radius = int(20 + local_progress * max_radius)
-            
-            # Spessore che diminuisce
-            thickness = max(2, int(8 * (1 - local_progress)))
-            
-            # Trasparenza che diminuisce
-            ring_alpha = (1 - local_progress) * alpha * 0.8
-            
-            # Disegna cerchio giallo/oro
-            color = (0, 215, 255)  # Gold/Yellow
-            cv2.circle(overlay, (center_x, center_y), radius, color, thickness)
-    
-    # Piccolo cerchio centrale che pulsa
-    pulse_scale = 1.0 + np.sin(progress * np.pi * 4) * 0.3
-    inner_radius = int(15 * pulse_scale)
-    cv2.circle(overlay, (center_x, center_y), inner_radius, (0, 255, 255), -1)
-    cv2.circle(overlay, (center_x, center_y), inner_radius, (255, 255, 255), 2)
-    
-    # Blend con alpha
-    cv2.addWeighted(overlay, alpha * 0.7, frame, 1 - alpha * 0.3, 0, frame)
-
-def draw_stats_overlay(frame, stats, width, height):
-    """Disegna overlay statistiche moderno e professionale"""
-    # Dimensioni overlay più largo
-    overlay_height = 100
-    overlay_y = height - overlay_height - 15
-    overlay_x = 15
-    overlay_width = min(700, width - 30)  # Più largo, responsive
-    
-    # Background moderno con gradiente
-    overlay_bg = frame[overlay_y:overlay_y + overlay_height, overlay_x:overlay_x + overlay_width].copy()
-    
-    # Gradiente scuro
-    gradient = np.zeros_like(overlay_bg, dtype=np.uint8)
-    for i in range(overlay_height):
-        intensity = int(15 + (i / overlay_height) * 10)
-        gradient[i, :] = [intensity, intensity, intensity]
-    
-    # Blend gradiente
-    overlay_bg = cv2.addWeighted(overlay_bg, 0.2, gradient, 0.8, 0)
-    frame[overlay_y:overlay_y + overlay_height, overlay_x:overlay_x + overlay_width] = overlay_bg
-    
-    # Bordo moderno con accent color
-    border_color = (0, 200, 255)
-    cv2.rectangle(frame, 
-                  (overlay_x, overlay_y), 
-                  (overlay_x + overlay_width, overlay_y + overlay_height),
-                  border_color, 2)
-    
-    # Linea accent in alto
-    cv2.line(frame,
-             (overlay_x, overlay_y),
-             (overlay_x + overlay_width, overlay_y),
-             (0, 255, 255), 4)
-    
-    # Layout a 3 colonne
-    col_width = overlay_width // 3
-    padding = 20
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    
-    # COLONNA 1: Tiri
-    x1 = overlay_x + padding
-    y_label = overlay_y + 30
-    y_value = overlay_y + 65
-    
-    cv2.putText(frame, "TIRI", (x1, y_label),
-                font, 0.5, (180, 180, 180), 1)
-    cv2.putText(frame, str(stats.shots_attempted), (x1, y_value),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3)
-    
-    # COLONNA 2: Canestri
-    x2 = overlay_x + col_width + padding
-    cv2.putText(frame, "CANESTRI", (x2, y_label),
-                font, 0.5, (180, 180, 180), 1)
-    cv2.putText(frame, str(stats.baskets_made), (x2, y_value),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 100), 3)
-    
-    # COLONNA 3: Percentuale con barra
-    x3 = overlay_x + 2 * col_width + padding
-    percentage = stats.get_percentage()
-    
-    cv2.putText(frame, "PRECISIONE", (x3, y_label),
-                font, 0.5, (180, 180, 180), 1)
-    
-    # Percentuale numero
-    perc_text = f"{percentage:.1f}%"
-    cv2.putText(frame, perc_text, (x3, y_value),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
-    
-    # Barra progressiva moderna sotto la percentuale
-    bar_x = x3
-    bar_y = y_value + 10
-    bar_width = col_width - padding - 10
-    bar_height = 8
-    
-    # Background barra (scuro)
-    cv2.rectangle(frame, (bar_x, bar_y), 
-                  (bar_x + bar_width, bar_y + bar_height),
-                  (40, 40, 40), -1)
-    
-    # Bordo barra
-    cv2.rectangle(frame, (bar_x, bar_y),
-                  (bar_x + bar_width, bar_y + bar_height),
-                  (80, 80, 80), 1)
-    
-    # Barra riempita con gradiente
-    fill_width = int((percentage / 100) * bar_width)
-    if fill_width > 2:
-        # Colore dinamico
-        if percentage >= 60:
-            color = (0, 255, 100)  # Verde
-        elif percentage >= 40:
-            color = (0, 200, 255)  # Giallo/Gold
-        else:
-            color = (0, 100, 255)  # Arancione
-        
-        # Riempimento con leggero gradiente
-        for i in range(fill_width):
-            intensity = 0.7 + (i / fill_width) * 0.3
-            c = tuple(int(x * intensity) for x in color)
-            cv2.line(frame, (bar_x + i, bar_y + 1),
-                    (bar_x + i, bar_y + bar_height - 1), c, 1)
-        
-        # Highlight sulla barra
-        cv2.line(frame, (bar_x, bar_y + 1),
-                (bar_x + fill_width, bar_y + 1),
-                (255, 255, 255), 1)
-
-def draw_final_stats_screen(width, height, stats, total_frames, fps):
-    """Crea schermata finale moderna e professionale"""
-    frame = np.zeros((height, width, 3), dtype=np.uint8)
-    
-    # Background gradiente moderno (scuro elegante)
-    for i in range(height):
-        intensity_r = int(10 + (i / height) * 15)
-        intensity_g = int(12 + (i / height) * 18)
-        intensity_b = int(15 + (i / height) * 20)
-        frame[i, :] = [intensity_b, intensity_g, intensity_r]
-    
-    # Overlay scuro centrale per contrast
-    overlay_margin = 100
-    cv2.rectangle(frame,
-                  (overlay_margin, overlay_margin),
-                  (width - overlay_margin, height - overlay_margin),
-                  (0, 0, 0), -1)
-    
-    # Blend overlay
-    overlay_alpha = 0.6
-    overlay_region = frame[overlay_margin:height-overlay_margin, overlay_margin:width-overlay_margin]
-    frame[overlay_margin:height-overlay_margin, overlay_margin:width-overlay_margin] = \
-        cv2.addWeighted(overlay_region, 1-overlay_alpha, 
-                       np.zeros_like(overlay_region), overlay_alpha, 0)
-    
-    # Bordo accent moderno
-    cv2.rectangle(frame,
-                  (overlay_margin, overlay_margin),
-                  (width - overlay_margin, height - overlay_margin),
-                  (0, 200, 255), 3)
-    
-    # Linea accent superiore
-    cv2.line(frame,
-             (overlay_margin, overlay_margin),
-             (width - overlay_margin, overlay_margin),
-             (0, 255, 255), 6)
-    
-    # Titolo principale moderno
-    title = "STATISTICHE FINALI"
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    title_scale = 2.2
-    title_thickness = 4
-    
-    (tw, th), _ = cv2.getTextSize(title, font, title_scale, title_thickness)
-    title_x = width // 2 - tw // 2
-    title_y = overlay_margin + 80
-    
-    # Shadow
-    cv2.putText(frame, title, (title_x + 2, title_y + 2),
-                font, title_scale, (0, 0, 0), title_thickness + 2)
-    
-    # Testo principale
-    cv2.putText(frame, title, (title_x, title_y),
-                font, title_scale, (255, 255, 255), title_thickness)
-    
-    # Accent line sotto titolo
-    line_y = title_y + 20
-    line_width = 300
-    cv2.line(frame,
-             (width // 2 - line_width // 2, line_y),
-             (width // 2 + line_width // 2, line_y),
-             (0, 255, 255), 3)
-    
-    # Container statistiche
-    stats_top = line_y + 60
-    stats_height = 320
-    stats_width = 700
-    stats_x = width // 2 - stats_width // 2
-    
-    # Background container
-    cv2.rectangle(frame,
-                  (stats_x, stats_top),
-                  (stats_x + stats_width, stats_top + stats_height),
-                  (30, 30, 30), -1)
-    
-    # Bordo container
-    cv2.rectangle(frame,
-                  (stats_x, stats_top),
-                  (stats_x + stats_width, stats_top + stats_height),
-                  (0, 200, 255), 2)
-    
-    # Statistiche in grid 2x2
-    cell_height = stats_height // 2
-    cell_width = stats_width // 2
-    
-    percentage = stats.get_percentage()
-    missed = max(0, stats.shots_attempted - stats.baskets_made)
-    
-    stats_data = [
-        ("TIRI TENTATI", str(stats.shots_attempted), (255, 255, 255), 0, 0),
-        ("CANESTRI", str(stats.baskets_made), (0, 255, 100), 1, 0),
-        ("TIRI SBAGLIATI", str(missed), (100, 150, 255), 0, 1),
-        ("PRECISIONE", f"{percentage:.1f}%", (0, 255, 255), 1, 1)
-    ]
-    
-    for label, value, color, col, row in stats_data:
-        cell_x = stats_x + col * cell_width
-        cell_y = stats_top + row * cell_height
-        
-        # Separatori
-        if col == 1:
-            cv2.line(frame, (cell_x, cell_y), (cell_x, cell_y + cell_height),
-                    (60, 60, 60), 2)
-        if row == 1:
-            cv2.line(frame, (stats_x, cell_y), (stats_x + stats_width, cell_y),
-                    (60, 60, 60), 2)
-        
-        # Label (piccolo, sopra)
-        label_y = cell_y + 50
-        cv2.putText(frame, label,
-                    (cell_x + 40, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150, 150, 150), 2)
-        
-        # Valore (grande, sotto)
-        value_scale = 2.5
-        value_thickness = 5
-        (vw, vh), _ = cv2.getTextSize(value, cv2.FONT_HERSHEY_SIMPLEX, value_scale, value_thickness)
-        value_x = cell_x + cell_width // 2 - vw // 2
-        value_y = cell_y + cell_height // 2 + 30
-        
-        # Glow effect
-        for i in range(3):
-            cv2.putText(frame, value, (value_x, value_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, value_scale, color, value_thickness + 4 - i)
-        
-        # Valore principale
-        cv2.putText(frame, value, (value_x, value_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, value_scale, color, value_thickness)
-    
-    # Footer con durata
-    duration = total_frames / fps
-    footer_y = stats_top + stats_height + 50
-    footer_text = f"Durata analisi: {int(duration // 60)}:{int(duration % 60):02d}"
-    
-    (fw, fh), _ = cv2.getTextSize(footer_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-    cv2.putText(frame, footer_text,
-                (width // 2 - fw // 2, footer_y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (120, 120, 120), 2)
-    
-    return frame
-
-def draw_detection(frame, box, cls, conf, track_id=None):
-    """Disegna una detection sul frame con stile personalizzato"""
-    x1, y1, x2, y2 = map(int, box)
-    
-    color = CLASS_COLORS.get(cls, (255, 255, 255))
-    thickness = CLASS_THICKNESS.get(cls, 2)
-    class_name = CLASS_NAMES.get(cls, f"Class_{cls}")
-    
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-    
-    label = f"{class_name} {conf:.2f}"
-    
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.6
-    font_thickness = 2
-    (label_w, label_h), baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
-    
-    cv2.rectangle(frame, 
-                  (x1, y1 - label_h - baseline - 5), 
-                  (x1 + label_w + 5, y1), 
-                  color, -1)
-    
-    cv2.putText(frame, label, (x1 + 2, y1 - baseline - 2), 
-                font, font_scale, (255, 255, 255), font_thickness)
-    
-    if track_id is not None:
-        track_label = f"ID:{track_id}"
-        cv2.putText(frame, track_label, (x1, y2 + 20), 
-                    font, 0.5, color, 2)
-
-def process_video_thread(file_id: str, input_path: Path, output_path: Path, test_mode: bool):
-    """Thread per processare il video"""
-    try:
-        cap = cv2.VideoCapture(str(input_path))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Calcola max_frames: limita a 3 minuti se non in test mode
-        if test_mode:
-            max_frames = int(fps * TEST_MODE_DURATION)
-        else:
-            max_frames = min(total_frames, int(fps * MAX_DURATION))
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
-        
-        # Inizializza statistiche con FPS dinamico
-        stats = BasketballStats(fps)
-        
-        frame_count = 0
-        processing_status[file_id] = {
-            "status": "processing", 
-            "progress": 0, 
-            "total": max_frames,
-            "detections": {name: 0 for name in CLASS_NAMES.values()},
-            "stats": {
-                "shots": 0,
-                "baskets": 0,
-                "percentage": 0.0
-            }
-        }
-        
-        stop_flags[file_id] = False
-
-        print(f"\n{'='*60}")
-        print(f"🎬 Processing video {file_id}")
-        print(f"   Mode: {'TEST (15s)' if test_mode else f'FULL (max {MAX_DURATION}s)'}")
-        print(f"   Total video frames: {total_frames}")
-        print(f"   Processing frames: {max_frames}")
-        print(f"   FPS: {fps}")
-        if max_frames < total_frames:
-            print(f"   ⚠️  Video truncated to first {MAX_DURATION}s")
-        print(f"{'='*60}\n")
-        
-        while cap.isOpened() and frame_count < max_frames:
-            # Controlla se è stato richiesto lo stop
-            if stop_flags.get(file_id, False):
-                print(f"⚠️  Processing stopped by user at frame {frame_count}/{max_frames}")
-                break
-            
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            annotated = frame.copy()
-            
-            # Detection + Tracking
-            results = yolo_model.track(
-                frame,
-                persist=True,
-                verbose=False,
-                conf=0.3,
-                iou=0.5,
-                tracker="bytetrack.yaml",
-                imgsz=640
-            )
-            
-            #traccia posizione canestro
-            basket_center_position = None  
-
-            # Processa detections
-            if results[0].boxes is not None and len(results[0].boxes) > 0:
-                for box in results[0].boxes:
-                    conf = float(box.conf[0])
-                    cls = int(box.cls[0])
-                    
-                    min_conf = {
-                        0: 0.6,
-                        1: 0.25,
-                        2: 0.7,
-                        3: 0.7,
-                        4: 0.77,
-                    }
-                    
-                    if conf < min_conf.get(cls, 0.3):
-                        continue
-                    
-                    xyxy = box.xyxy[0]
-                    track_id = int(box.id[0]) if box.id is not None else None
-                    
-                    # Se rilevi il canestro (classe 3), salva la sua posizione centrale
-                    if cls == 3:  # basket
-                        x1, y1, x2, y2 = map(int, xyxy)
-                        basket_center_position = ((x1 + x2) // 2, (y1 + y2) // 2)
-                        stats.last_known_basket_position = basket_center_position  # aggiorna ultima posizione nota
-                    
-                    if cls == 4:  # player-shooting
-                        if stats.register_shot(frame_count):
-                            print(f"🏀 SHOT #{stats.shots_attempted} at frame {frame_count}")
-                    
-                    if cls == 1:  # ball-in-basket
-                        #usa posizione corrente o ultima nota
-                        position_to_use = basket_center_position if basket_center_position else stats.last_known_basket_position
-                        if stats.register_basket(frame_count, position_to_use):
-                            print(f"🎯 BASKET #{stats.baskets_made} at frame {frame_count} - {stats.get_percentage():.1f}%")
-                    
-                    draw_detection(annotated, xyxy, cls, conf, track_id)
-                    
-                    class_name = CLASS_NAMES.get(cls, f"Class_{cls}")
-                    processing_status[file_id]["detections"][class_name] += 1
-            
-            # Disegna statistiche real-time
-            draw_stats_overlay(annotated, stats, width, height)
-            
-            # Animazione canestro
-            if stats.is_animating(frame_count):
-                progress = stats.get_animation_progress(frame_count)
-                draw_basket_animation(annotated, stats, progress)  
-            
-            # Info frame
-            info_text = f"Frame: {frame_count+1}/{max_frames}"
-            cv2.putText(annotated, info_text, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Legenda
-            legend_y = 30
-            for cls, name in CLASS_NAMES.items():
-                color = CLASS_COLORS[cls]
-                text = f"{name}"
-                cv2.putText(annotated, text, (width - 200, legend_y),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                legend_y += 25
-            
-            out.write(annotated)
-            frame_count += 1
-            
-            # Aggiorna status
-            processing_status[file_id].update({
-                "status": "processing",
-                "progress": frame_count,
-                "total": max_frames,
-                "percentage": int((frame_count / max_frames) * 100),
-                "stats": {
-                    "shots": stats.shots_attempted,
-                    "baskets": stats.baskets_made,
-                    "percentage": stats.get_percentage()
-                }
-            })
-            
-            if frame_count % 30 == 0:
-                pct = processing_status[file_id]['percentage']
-                print(f"⏳ Progress: {frame_count}/{max_frames} frames ({pct}%) | Shots: {stats.shots_attempted} | Baskets: {stats.baskets_made}")
-        
-        # Gestisci stop vs completamento normale
-        was_stopped = stop_flags.get(file_id, False)
-        
-        if was_stopped:
-            # Processing interrotto dall'utente
-            cap.release()
-            out.release()
-            
-            # Cleanup file temporaneo
-            if output_path.exists():
-                output_path.unlink()
-            
-            # Aggiorna status
-            processing_status[file_id] = {
-                "status": "stopped",
-                "progress": frame_count,
-                "total": max_frames,
-                "percentage": int((frame_count / max_frames) * 100),
-                "stats": {
-                    "shots": stats.shots_attempted,
-                    "baskets": stats.baskets_made,
-                    "percentage": stats.get_percentage()
-                },
-                "message": f"Processing stopped at frame {frame_count}/{max_frames}"
-            }
-            
-            # Cleanup flag
-            if file_id in stop_flags:
-                del stop_flags[file_id]
-            
-            print(f"\n{'='*60}")
-            print(f"⚠️  Video {file_id} processing STOPPED by user")
-            print(f"   Frames processed: {frame_count}/{max_frames}")
-            print(f"{'='*60}\n")
-            return
-
-        # Schermata finale (5 secondi)
-        final_screen = draw_final_stats_screen(width, height, stats, frame_count, fps)
-        final_frames = fps * 5  # 5 secondi
-        for _ in range(final_frames):
-            out.write(final_screen)
-        
-        cap.release()
-        out.release()
-        
-        # Cleanup flag
-        if file_id in stop_flags:
-            del stop_flags[file_id]
-
-        processing_status[file_id].update({
-            "status": "completed",
-            "progress": frame_count,
-            "total": max_frames,
-            "percentage": 100,
-            "stats": {
-                "shots": stats.shots_attempted,
-                "baskets": stats.baskets_made,
-                "percentage": stats.get_percentage()
-            }
-        })
-        
-        print(f"\n{'='*60}")
-        print(f"✅ Video {file_id} processing completed!")
-        print(f"   Frames processed: {frame_count}")
-        print(f"   📊 FINAL STATS:")
-        print(f"      Shots Attempted: {stats.shots_attempted}")
-        print(f"      Baskets Made: {stats.baskets_made}")
-        print(f"      Shooting %: {stats.get_percentage():.1f}%")
-        print(f"{'='*60}\n")
-        
-    except Exception as e:
-        processing_status[file_id] = {
-            "status": "error", 
-            "message": str(e)
-        }
-        print(f"❌ Error processing video {file_id}: {e}")
+    save_path = Config.UPLOAD_DIR / f"{file_id}{ext}"
+    with open(save_path, "wb") as f: shutil.copyfileobj(file.file, f)
+    return {"file_id": file_id, "filename": file.filename}
 
 @app.post("/process/{file_id}")
-async def process_video(file_id: str, test_mode: bool = False):
-    """Start video processing"""
-    input_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
-    if not input_files:
-        raise HTTPException(404, "Video not found")
+async def start_process(file_id: str, test_mode: bool = False, mode: ProcessingMode = ProcessingMode.FULL_TRACKING):
+    input_files = list(Config.UPLOAD_DIR.glob(f"{file_id}.*"))
+    if not input_files: raise HTTPException(404, "Video not found.")
     
-    input_path = input_files[0]
-    output_path = PROCESSED_DIR / f"{file_id}_processed.mp4"
-    
-    thread = threading.Thread(
-        target=process_video_thread, 
-        args=(file_id, input_path, output_path, test_mode)
-    )
+    processor = VideoProcessor(file_id, input_files[0], Config.PROCESSED_DIR / f"{file_id}_processed.mp4", test_mode, mode)
+    thread = threading.Thread(target=processor.run)
     thread.start()
-    
-    return {
-        "file_id": file_id, 
-        "status": "started",
-        "test_mode": test_mode
-    }
+    return {"status": "started", "file_id": file_id, "mode": mode}
+
+@app.get("/status/{file_id}")
+def get_status(file_id: str): return processing_status.get(file_id, {"status": "not_found"})
 
 @app.post("/stop/{file_id}")
-async def stop_processing(file_id: str):
-    """Stop video processing"""
-    if file_id not in processing_status:
-        raise HTTPException(404, "Video processing not found")
-    
-    current_status = processing_status[file_id].get("status")
-    
-    if current_status != "processing":
-        raise HTTPException(400, f"Cannot stop: video is {current_status}")
-    
-    # Imposta flag di stop
-    stop_flags[file_id] = True
-    
-    print(f"🛑 Stop requested for video {file_id}")
-    
-    return {
-        "file_id": file_id,
-        "status": "stop_requested",
-        "message": "Processing will stop at next frame"
-    }
-
+def stop_process(file_id: str):
+    if file_id in processing_status and processing_status[file_id]['status'] == 'processing':
+        stop_flags[file_id] = True
+        return {"message": "Stopping..."}
+    return {"message": "Not processing or not found"}
 
 @app.get("/download/{file_id}")
-async def download_video(file_id: str):
-    """Download processed video"""
-    output_path = PROCESSED_DIR / f"{file_id}_processed.mp4"
-    if not output_path.exists():
-        raise HTTPException(404, "Processed video not found")
+def download_result(file_id: str):
+    path = Config.PROCESSED_DIR / f"{file_id}_processed.mp4"
+    if not path.exists(): raise HTTPException(404, "File not ready.")
     
-    return FileResponse(
-        output_path,
-        media_type="video/mp4",
-        filename=f"basketball_tracked_{file_id}.mp4"
-    )
-
-@app.delete("/clear/{file_id}")
-async def clear_video(file_id: str):
-    """Clear uploaded and processed videos"""
-    deleted_count = 0
-    for path in UPLOAD_DIR.glob(f"{file_id}.*"):
-        path.unlink()
-        deleted_count += 1
-    for path in PROCESSED_DIR.glob(f"{file_id}*"):
-        path.unlink()
-        deleted_count += 1
-    if file_id in processing_status:
-        del processing_status[file_id]
-    
-    # NUOVO: Cleanup flag di stop
-    if file_id in stop_flags:
-        del stop_flags[file_id]
-    
-    return {"status": "cleared", "files_deleted": deleted_count}
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "model_loaded": yolo_model is not None,
-        "model_path": str(CUSTOM_MODEL_PATH),
-        "classes": CLASS_NAMES,
-        "uploads_dir": str(UPLOAD_DIR.absolute()),
-        "processed_dir": str(PROCESSED_DIR.absolute())
-    }
-
-@app.get("/model/info")
-async def model_info():
-    """Get model information"""
-    return {
-        "model_path": str(CUSTOM_MODEL_PATH),
-        "classes": CLASS_NAMES,
-        "colors": {name: f"BGR{tuple(CLASS_COLORS[idx])}" for idx, name in CLASS_NAMES.items()},
-        "num_classes": len(CLASS_NAMES)
-    }
+    # We don't delete immediately here to allow retries. 
+    # The AutoCleanup service will handle it after RETENTION_SECONDS.
+    return FileResponse(path, media_type="video/mp4", filename=f"basket_ai_{file_id}.mp4")
 
 if __name__ == "__main__":
-    print("\n" + "🏀 "*30)
-    print("BASKETBALL TRACKER API with STATS - Starting...")
-    print("🏀 "*30)
-    print(f"\n📁 Uploads directory: {UPLOAD_DIR.absolute()}")
-    print(f"📁 Processed directory: {PROCESSED_DIR.absolute()}")
-    print(f"🎯 Model: {CUSTOM_MODEL_PATH.absolute()}")
-    print(f"📋 Classes: {list(CLASS_NAMES.values())}")
-    print(f"\n⚙️  Timing Configuration:")
-    print(f"   Shot cooldown: {SHOT_COOLDOWN_SECONDS}s")
-    print(f"   Basket cooldown: {BASKET_COOLDOWN_SECONDS}s")
-    print(f"   Animation duration: {BASKET_ANIMATION_SECONDS}s")
-    print(f"   Max processing: {MAX_DURATION}s (first 3 minutes)")
-    print(f"\n🌐 Server: http://localhost:8000")
-    print(f"📖 Docs: http://localhost:8000/docs")
-    print("\n" + "="*60 + "\n")
-    
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    print("\n🏀 SERVER STARTING...")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

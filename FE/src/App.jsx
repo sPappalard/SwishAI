@@ -1,377 +1,272 @@
-import { useState, useRef, useEffect } from 'react';
-import { Upload, Video, Loader2, Download, Home } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Upload, Play, Square, Download, Activity, CheckCircle, AlertCircle, Video, Settings } from 'lucide-react';
+
+const API_URL = 'http://localhost:8000'; // Change if deployed
 
 export default function App() {
   const [file, setFile] = useState(null);
   const [fileId, setFileId] = useState(null);
   const [status, setStatus] = useState('idle');
-  const [dragActive, setDragActive] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [stats, setStats] = useState({ shots: 0, baskets: 0, accuracy: 0 });
+  
+  // Settings
   const [testMode, setTestMode] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0, percentage: 0 });
-  const fileInputRef = useRef(null);
-  const pollingInterval = useRef(null);
-  const [showStopModal, setShowStopModal] = useState(false);
   const [processingMode, setProcessingMode] = useState('full_tracking');
-
-  const API_URL = 'http://localhost:8000';
+  
+  const [errorMsg, setErrorMsg] = useState('');
+  const statusInterval = useRef(null);
 
   useEffect(() => {
-    return () => {
-      if (pollingInterval.current) clearInterval(pollingInterval.current);
-    };
-  }, []);
-
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(e.type === "dragenter" || e.type === "dragover");
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files?.[0]) {
-      handleFileSelect(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileSelect = (selectedFile) => {
-    if (selectedFile && selectedFile.type.startsWith('video/')) {
-      setFile(selectedFile);
-      setStatus('idle');
+    if (status === 'processing') {
+      statusInterval.current = setInterval(checkStatus, 1000);
     } else {
-      alert('Please select a valid video file');
+      clearInterval(statusInterval.current);
     }
-  };
+    return () => clearInterval(statusInterval.current);
+  }, [status]);
 
-  const uploadVideo = async () => {
-    if (!file) return;
-    
-    setStatus('uploading');
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const res = await fetch(`${API_URL}/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      setFileId(data.file_id);
-      setStatus('uploaded');
-    } catch (err) {
-      alert('Upload failed: ' + err.message);
+  const handleFileChange = (e) => {
+    if (e.target.files[0]) {
+      setFile(e.target.files[0]);
       setStatus('idle');
+      setProgress(0);
+      setStats({ shots: 0, baskets: 0, accuracy: 0 });
     }
   };
 
-  const startPolling = (id) => {
-    pollingInterval.current = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_URL}/status/${id}`);
-        const data = await res.json();
-        
-        if (data.status === 'completed') {
-          clearInterval(pollingInterval.current);
-          setStatus('completed');
-          setProgress({ current: data.total, total: data.total, percentage: 100 });
-        } else if (data.status === 'stopped') {  // NUOVO
-        clearInterval(pollingInterval.current);
-        setStatus('stopped');
-        setProgress({
-          current: data.progress,
-          total: data.total,
-          percentage: data.percentage || 0
-        });
-        } else if (data.status === 'processing') {
-          setProgress({
-            current: data.progress,
-            total: data.total,
-            percentage: data.percentage || 0
-          });
-        } else if (data.status === 'error') {
-          clearInterval(pollingInterval.current);
-          alert('Processing failed: ' + data.message);
-          setStatus('uploaded');
-        }
-      } catch (err) {
-        console.error('Polling error:', err);
-      }
-    }, 1000);
+  const uploadAndStart = async () => {
+    if (!file) return;
+
+    try {
+      setStatus('uploading');
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const uploadRes = await fetch(`${API_URL}/upload`, { method: 'POST', body: formData });
+      if (!uploadRes.ok) throw new Error("Upload failed");
+      const uploadData = await uploadRes.json();
+      const fid = uploadData.file_id;
+      setFileId(fid);
+
+      // Include processing_mode in query
+      const processRes = await fetch(
+        `${API_URL}/process/${fid}?test_mode=${testMode}&mode=${processingMode}`, 
+        { method: 'POST' }
+      );
+      
+      if (!processRes.ok) throw new Error("Processing start failed");
+      setStatus('processing');
+
+    } catch (err) {
+      console.error(err);
+      setStatus('error');
+      setErrorMsg(err.message);
+    }
   };
 
-  const processVideo = async () => {
+  const checkStatus = async () => {
     if (!fileId) return;
-    
-    setStatus('processing');
-    setProgress({ current: 0, total: 0, percentage: 0 });
-    
     try {
-      await fetch(`${API_URL}/process/${fileId}?test_mode=${testMode}&processing_mode=${processingMode}`, { method: 'POST' });
-      startPolling(fileId);
+      const res = await fetch(`${API_URL}/status/${fileId}`);
+      const data = await res.json();
+
+      if (data.status === 'processing') {
+        setProgress(data.percentage);
+        setStats(data.stats);
+      } else if (data.status === 'completed') {
+        setStatus('completed');
+        setProgress(100);
+        setStats(data.stats);
+      } else if (data.status === 'error') {
+        setStatus('error');
+        setErrorMsg(data.message);
+      } else if (data.status === 'stopped') {
+        setStatus('stopped');
+      }
     } catch (err) {
-      alert('Processing failed: ' + err.message);
-      setStatus('uploaded');
+      console.error("Status check failed", err);
     }
   };
 
   const stopProcessing = async () => {
     if (!fileId) return;
-    
     try {
       await fetch(`${API_URL}/stop/${fileId}`, { method: 'POST' });
-      
-      // Ferma il polling
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current);
-      }
-      
       setStatus('stopped');
-      setShowStopModal(false); // Chiudi modale
     } catch (err) {
-      alert('Failed to stop processing: ' + err.message);
-      setShowStopModal(false);
+      console.error(err);
     }
   };
 
-  const resetApp = () => {
-    if (pollingInterval.current) clearInterval(pollingInterval.current);
-    if (fileId) {
-      fetch(`${API_URL}/clear/${fileId}`, { method: 'DELETE' });
-    }
-    setFile(null);
-    setFileId(null);
-    setStatus('idle');
-    setTestMode(false);
-    setProcessingMode('full_tracking'); // NUOVO
-    setProgress({ current: 0, total: 0, percentage: 0 });
+  const downloadVideo = () => {
+    window.open(`${API_URL}/download/${fileId}`, '_blank');
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-500 via-orange-600 to-red-600 p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-bold text-white mb-2">🏀 Basketball Tracker</h1>
-          <p className="text-orange-100">AI-powered ball, basket and player tracking</p>
+    <div className="min-h-screen bg-slate-900 text-white font-sans p-8">
+      <div className="max-w-4xl mx-auto space-y-8">
+        
+        {/* Header */}
+        <div className="flex flex-col items-center space-y-4">
+          <div className="p-1 bg-gradient-to-r from-orange-500 to-yellow-400 rounded-2xl shadow-lg shadow-orange-500/20">
+            <img 
+              src="logo.png" 
+              alt="SWISH AI Logo" 
+              className="w-32 h-32 rounded-xl object-cover"
+            />
+          </div>
+          <div className="text-center space-y-2">
+            <h1 className="text-5xl font-extrabold bg-gradient-to-r from-orange-500 to-yellow-400 bg-clip-text text-transparent tracking-tight">
+              SWISH AI
+            </h1>
+            <p className="text-slate-400 text-lg">Analyze your shots with computer vision</p>
+          </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-2xl p-8">
-          {status === 'idle' || status === 'uploading' ? (
-            <div>
-              <div
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-                className={`border-4 border-dashed rounded-xl p-12 text-center transition-all ${
-                  dragActive ? 'border-orange-500 bg-orange-50' : 'border-gray-300 bg-gray-50'
-                }`}
-              >
-                <Upload className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-                <p className="text-xl font-semibold mb-2">Drop your video here</p>
-                <p className="text-gray-500 mb-4">or click to browse (max 3 minutes)</p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="video/*"
-                  onChange={(e) => handleFileSelect(e.target.files[0])}
-                  className="hidden"
-                />
-                <button
-                  onClick={() => fileInputRef.current.click()}
-                  className="bg-orange-500 text-white px-6 py-3 rounded-lg hover:bg-orange-600 transition"
-                >
-                  Select Video
-                </button>
+        {/* Main Card */}
+        <div className="bg-slate-800 rounded-2xl p-8 shadow-xl border border-slate-700">
+          
+          {/* Upload Section */}
+          <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-600 rounded-xl p-8 transition-colors hover:border-orange-500/50">
+            <input 
+              type="file" 
+              accept="video/*" 
+              onChange={handleFileChange} 
+              className="hidden" 
+              id="video-upload"
+              disabled={status === 'processing'}
+            />
+            <label htmlFor="video-upload" className="cursor-pointer flex flex-col items-center gap-4">
+              <div className="w-16 h-16 bg-slate-700 rounded-full flex items-center justify-center text-orange-400">
+                {file ? <Video size={32} /> : <Upload size={32} />}
+              </div>
+              <div className="text-center">
+                <p className="text-lg font-medium">{file ? file.name : "Select Video File"}</p>
+                <p className="text-sm text-slate-500 mt-1">MP4, MOV, AVI supported</p>
+              </div>
+            </label>
+          </div>
+
+          {/* Controls */}
+          {file && (
+            <div className="mt-8 flex flex-col gap-6">
+              
+              {/* Settings Row */}
+              <div className="flex flex-wrap items-center justify-center gap-6 bg-slate-900/50 p-4 rounded-xl border border-slate-700">
+                
+                {/* Mode Selector */}
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs text-slate-400 font-bold uppercase tracking-wider flex items-center gap-2">
+                    <Settings size={14} /> Processing Mode
+                  </label>
+                  <select
+                    value={processingMode}
+                    onChange={(e) => setProcessingMode(e.target.value)}
+                    disabled={status === 'processing'}
+                    className="bg-slate-800 text-white border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
+                  >
+                    <option value="full_tracking">Full Tracking (Boxes + Effects)</option>
+                    <option value="stats_effects">Stats & Effects (Clean)</option>
+                    <option value="stats_only">Stats Only (Minimal)</option>
+                  </select>
+                </div>
+
+                {/* Test Mode Toggle */}
+                <div className="flex items-center gap-3 pt-6">
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={testMode} 
+                      onChange={(e) => setTestMode(e.target.checked)}
+                      disabled={status === 'processing'}
+                      className="w-5 h-5 accent-orange-500 rounded focus:ring-orange-500 focus:ring-2"
+                    />
+                    <span className="text-sm group-hover:text-white transition-colors">Test Mode (15 sec)</span>
+                  </label>
+                </div>
               </div>
 
-              {file && (
-                <div className="mt-6 p-4 bg-green-50 rounded-lg flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Video className="w-6 h-6 text-green-600" />
-                    <span className="font-medium">{file.name}</span>
-                  </div>
-                  <button
-                    onClick={uploadVideo}
-                    disabled={status === 'uploading'}
-                    className="bg-orange-500 text-white px-6 py-2 rounded-lg hover:bg-orange-600 disabled:opacity-50 transition"
+              {/* Action Buttons */}
+              <div className="flex justify-center">
+                {status === 'processing' ? (
+                  <button 
+                    onClick={stopProcessing}
+                    className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-lg shadow-red-500/20"
                   >
-                    {status === 'uploading' ? 'Uploading...' : 'Upload & Continue'}
+                    <Square size={20} /> Stop Analysis
+                  </button>
+                ) : (
+                  <button 
+                    onClick={uploadAndStart}
+                    disabled={status === 'completed'}
+                    className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-lg shadow-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
+                  >
+                    <Play size={20} /> {status === 'completed' ? 'Done' : 'Start Analysis'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Progress Section */}
+          {status !== 'idle' && (
+            <div className="mt-8 space-y-6 animate-in fade-in slide-in-from-bottom-4">
+              
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm font-medium text-slate-400">
+                  <span className="capitalize flex items-center gap-2">
+                    <Activity size={16} className={status === 'processing' ? 'animate-pulse text-orange-400' : ''} />
+                    {status}...
+                  </span>
+                  <span>{progress}%</span>
+                </div>
+                <div className="h-4 bg-slate-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-orange-500 to-yellow-400 transition-all duration-500 ease-out"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-slate-700/50 p-4 rounded-xl text-center border border-slate-600">
+                  <p className="text-slate-400 text-xs uppercase tracking-wider">Shots</p>
+                  <p className="text-3xl font-bold text-white mt-1">{stats.shots}</p>
+                </div>
+                <div className="bg-slate-700/50 p-4 rounded-xl text-center border border-slate-600">
+                  <p className="text-slate-400 text-xs uppercase tracking-wider">Baskets</p>
+                  <p className="text-3xl font-bold text-green-400 mt-1">{stats.baskets}</p>
+                </div>
+                <div className="bg-slate-700/50 p-4 rounded-xl text-center border border-slate-600">
+                  <p className="text-slate-400 text-xs uppercase tracking-wider">Accuracy</p>
+                  <p className="text-3xl font-bold text-yellow-400 mt-1">
+                    {typeof stats.accuracy === 'number' ? stats.accuracy.toFixed(1) : 0}%
+                  </p>
+                </div>
+              </div>
+
+              {status === 'completed' && (
+                <div className="flex justify-center pt-4">
+                  <button 
+                    onClick={downloadVideo}
+                    className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-lg shadow-green-500/20 transform hover:scale-105"
+                  >
+                    <Download size={20} /> Download Analyzed Video
                   </button>
                 </div>
               )}
-            </div>
-          ) : status === 'uploaded' ? (
-            <div className="text-center">
-              <Video className="w-20 h-20 mx-auto mb-4 text-orange-500" />
-              <h2 className="text-2xl font-bold mb-4">Video Ready!</h2>
-              <p className="text-gray-600 mb-6">Configure processing options below</p>
-              
-              <div className="mb-6 flex items-center justify-center gap-3">
-                <input
-                  type="checkbox"
-                  id="testMode"
-                  checked={testMode}
-                  onChange={(e) => setTestMode(e.target.checked)}
-                  className="w-5 h-5 text-orange-500"
-                />
-                <label htmlFor="testMode" className="text-gray-700 font-medium">
-                  Test mode (process only first 15 seconds)
-                </label>
-              </div>
 
-              {/* NUOVO: Dropdown modalità processamento */}
-              <div className="mb-6 max-w-md mx-auto">
-                <label htmlFor="processingMode" className="block text-sm font-medium text-gray-700 mb-2">
-                  Processing Mode
-                </label>
-                <select
-                  id="processingMode"
-                  value={processingMode}
-                  onChange={(e) => setProcessingMode(e.target.value)}
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white text-gray-900 font-medium"
-                >
-                  <option value="stats_only">Stats Only</option>
-                  <option value="stats_effects">Stats + Basket Effects</option>
-                  <option value="full_tracking">Full Tracking</option>
-                </select>
-                <p className="mt-2 text-sm text-gray-500">
-                  {processingMode === 'stats_only' && '📊 Only statistics overlay and final summary'}
-                  {processingMode === 'stats_effects' && '✨ Statistics + basket animation effects'}
-                  {processingMode === 'full_tracking' && '🎯 Complete tracking with all detections'}
-                </p>
-              </div>
-
-              <button
-                onClick={processVideo}
-                className="bg-orange-500 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-orange-600 transition"
-              >
-                🎯 Process Video
-              </button>
-            </div>
-          ) : status === 'processing' ? (
-            <div className="text-center py-12">
-              <Loader2 className="w-20 h-20 mx-auto mb-4 text-orange-500 animate-spin" />
-              <h2 className="text-2xl font-bold mb-2">Processing Your Video...</h2>
-              <p className="text-gray-600 mb-6">
-                {testMode ? 'Processing first 15 seconds (test mode)' : 'This may take several minutes'}
-              </p>
-              
-              <div className="max-w-md mx-auto">
-                <div className="mb-2 flex justify-between text-sm font-medium">
-                  <span>Progress</span>
-                  <span>{progress.percentage}%</span>
+              {status === 'error' && (
+                <div className="bg-red-500/10 border border-red-500/50 text-red-200 p-4 rounded-lg flex items-center gap-3">
+                  <AlertCircle size={20} />
+                  <p>{errorMsg || "An unknown error occurred."}</p>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-                  <div
-                    className="bg-orange-500 h-4 rounded-full transition-all duration-300"
-                    style={{ width: `${progress.percentage}%` }}
-                  />
-                </div>
-                <p className="text-sm text-gray-500 mt-2">
-                  Frame {progress.current} / {progress.total}
-                </p>
-              </div>
-
-              {/*Pulsante Stop */}
-              <button
-                onClick={() => setShowStopModal(true)}
-                className="mt-8 bg-red-500 text-white px-8 py-3 rounded-lg hover:bg-red-600 transition font-semibold flex items-center gap-2 mx-auto"
-              >
-                <span className="text-xl">🛑</span>
-                Stop Processing
-              </button>
+              )}
             </div>
-          ) : status === 'completed' ? (
-            <div className="text-center">
-              <div className="mb-6">
-                <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-4xl">✅</span>
-                </div>
-                <h2 className="text-2xl font-bold mb-2">Processing Complete!</h2>
-                <p className="text-gray-600">Your tracked video is ready to download</p>
-              </div>
-              
-              <div className="flex gap-4 justify-center">
-                <a
-                  href={`${API_URL}/download/${fileId}`}
-                  download
-                  className="bg-green-500 text-white px-8 py-4 rounded-lg hover:bg-green-600 transition flex items-center gap-2 text-lg font-semibold"
-                >
-                  <Download className="w-6 h-6" />
-                  Download Video
-                </a>
-                <button
-                  onClick={resetApp}
-                  className="bg-gray-500 text-white px-8 py-4 rounded-lg hover:bg-gray-600 transition flex items-center gap-2 text-lg font-semibold"
-                >
-                  <Home className="w-6 h-6" />
-                  New Video
-                </button>
-              </div>
-            </div>
-          ) 
-          : status === 'stopped' ? (
-            <div className="text-center">
-              <div className="mb-6">
-                <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-4xl">🛑</span>
-                </div>
-                <h2 className="text-2xl font-bold mb-2">Processing Stopped</h2>
-                <p className="text-gray-600">The video processing was interrupted</p>
-                <p className="text-sm text-gray-500 mt-2">
-                  Processed {progress.current} of {progress.total} frames ({progress.percentage}%)
-                </p>
-              </div>
-              
-              <button
-                onClick={resetApp}
-                className="bg-orange-500 text-white px-8 py-4 rounded-lg hover:bg-orange-600 transition flex items-center gap-2 text-lg font-semibold mx-auto"
-              >
-                <Home className="w-6 h-6" />
-                Start New Video
-              </button>
-            </div>
-          ) : null}
+          )}
         </div>
       </div>
-      {/* NUOVO: Modale conferma stop */}
-      {showStopModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 transform transition-all">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <span className="text-4xl">⚠️</span>
-              </div>
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">
-                Stop Processing?
-              </h3>
-              <p className="text-gray-600">
-                Are you sure you want to stop the video processing?
-              </p>
-              <p className="text-sm text-gray-500 mt-2">
-                Progress will be lost and you'll need to start over.
-              </p>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowStopModal(false)}
-                className="flex-1 bg-gray-200 text-gray-800 px-6 py-3 rounded-lg hover:bg-gray-300 transition font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={stopProcessing}
-                className="flex-1 bg-red-500 text-white px-6 py-3 rounded-lg hover:bg-red-600 transition font-semibold"
-              >
-                Yes, Stop
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

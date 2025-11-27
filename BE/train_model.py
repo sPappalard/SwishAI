@@ -1,394 +1,357 @@
 """
-🏀 BASKETBALL DETECTION - YOLO11s Training Script
-Optimized for GTX 1060 6GB + Windows
-Target: 90%+ mAP@50, Precision, Recall on all 5 classes
+🏀 BASKETBALL DETECTION - YOLO11 Training Script (Refactored)
+=============================================================
+This script handles the training process for the basketball detection model.
+It includes:
+1. Automatic dataset validation.
+2. GPU hardware verification.
+3. Advanced interruption handling (Ctrl+C).
+4. Custom logging and metrics visualization.
+5. Optimized hyperparameters for basketball motion tracking.
+
+Author: Refactored by Gemini
+Target: 90%+ mAP@50 on 5 classes
 """
 
-from ultralytics import YOLO
-import yaml
-from pathlib import Path
-import torch
-import signal
 import sys
-from datetime import datetime
+import signal
 import time
+import yaml
+import torch
+from pathlib import Path
+from datetime import datetime
+from ultralytics import YOLO
 
-# ==================== CONFIGURAZIONE ====================
-DATASET_PATH = Path("basketball-detection-srfkd-1")
-DATA_YAML = "data_basketball.yaml"  # File YAML ottimizzato
-BASE_MODEL = "yolo11s.pt"  # Small model per 10-20h training
+# ==============================================================================
+# 1. CONFIGURATION CLASS
+# ==============================================================================
+class Config:
+    """
+    Centralizes all configuration parameters, paths, and hyperparameters.
+    Modify this section to tune the training process.
+    """
+    # --- Paths ---
+    PROJECT_NAME = "basketball_training"
+    RUN_NAME = "yolo11s_5classes"
+    DATASET_DIR = Path("basketball-detection-srfkd-1")
+    DATA_YAML = "data_basketball.yaml"
+    BASE_MODEL = "yolo11s.pt"  # Starting point (Pre-trained COCO)
+    
+    # --- Checkpoint Handling ---
+    RESUME_PATH = Path(f"{PROJECT_NAME}/{RUN_NAME}/weights/last.pt")
+    
+    # --- Hardware & System ---
+    WORKERS = 0        # Set to 0 for Windows compatibility to avoid multiprocessing errors
+    DEVICE = 0         # GPU Index (0 for the first GPU)
+    SEED = 42          # Fixed seed for reproducibility
+    
+    # --- Core Training Hyperparameters ---
+    EPOCHS = 200       # Total number of training epochs
+    BATCH_SIZE = 8     # Batch size (Adjust based on VRAM, 8 is good for 6GB VRAM)
+    IMG_SIZE = 640     # Input image resolution
+    PATIENCE = 30      # Early stopping patience (epochs without improvement)
+    SAVE_PERIOD = 5    # Save heavy checkpoints every X epochs
+    OPTIMIZER = 'AdamW'
+    
+    # --- Learning Rate Strategy ---
+    LR0 = 0.01         # Initial learning rate (SGD=1E-2, Adam=1E-3)
+    LRF = 0.001        # Final learning rate (lr0 * lrf)
+    MOMENTUM = 0.937
+    WEIGHT_DECAY = 0.0005
+    WARMUP_EPOCHS = 3.0
+    COS_LR = True      # Use Cosine LR scheduler
+    
+    # --- Loss Function Weights ---
+    # Adjusted to prioritize bounding box accuracy over classification
+    BOX_GAIN = 7.5     # Box loss gain
+    CLS_GAIN = 0.5     # Class loss gain
+    DFL_GAIN = 1.5     # Distribution Focal Loss gain
+    
+    # --- Data Augmentation (Optimized for Sports/Motion) ---
+    # Heavy augmentation helps YOLO generalize on limited datasets
+    AUGMENTATION = {
+        'hsv_h': 0.015,     # HSV-Hue adjustment
+        'hsv_s': 0.7,       # HSV-Saturation adjustment
+        'hsv_v': 0.4,       # HSV-Value adjustment
+        'degrees': 10.0,    # Rotation (+/- deg)
+        'translate': 0.1,   # Translation (+/- fraction)
+        'scale': 0.6,       # Scale gain (+/- gain)
+        'shear': 2.0,       # Shear angle (+/- deg) - Important for basket perspective
+        'perspective': 0.0005, # Perspective warp
+        'flipud': 0.0,      # Vertical flip (Disabled: gravity matters)
+        'fliplr': 0.5,      # Horizontal flip (Enabled: courts are symmetric)
+        'mosaic': 1.0,      # Mosaic (Probability)
+        'mixup': 0.15,      # Mixup (Probability) - Helps with player overlap
+        'copy_paste': 0.1,  # Segment copy-paste (Probability)
+        'erasing': 0.4,     # Random erasing (Probability) - Simulates occlusion
+        'auto_augment': 'randaugment', # Use RandAugment policy
+    }
 
-# Auto-resume se esiste checkpoint
-RESUME_PATH = Path("basketball_training/yolo11s_5classes/weights/last.pt")
-RESUME_TRAINING = RESUME_PATH.exists()
-
-# ==================== GESTIONE INTERRUZIONI ====================
-interrupted = False
-
-def signal_handler(sig, frame):
-    global interrupted
-    print("\n\n" + "="*60)
-    print("⚠️  TRAINING PAUSED BY USER")
-    print("="*60)
-    print(f"📁 Checkpoint saved at: {RESUME_PATH}")
-    print("🔄 To resume, simply run this script again")
-    print("   RESUME_TRAINING will auto-detect the checkpoint")
-    print("="*60)
-    interrupted = True
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, signal_handler)
-
-# ==================== LOGGING ====================
+# ==============================================================================
+# 2. LOGGING UTILITIES
+# ==============================================================================
 class TrainingLogger:
+    """
+    Handles console output formatting and progress tracking.
+    """
     def __init__(self):
         self.start_time = None
-        self.epoch_start = None
-        
-    def start_training(self):
+        self.epoch_start_time = None
+
+    def start_session(self):
+        """Called when training session begins."""
         self.start_time = time.time()
-        
-    def start_epoch(self, epoch, total_epochs):
-        self.epoch_start = time.time()
-        self.current_epoch = epoch
-        self.total_epochs = total_epochs
-        print("\n" + "─"*60)
-        print(f"🔄 EPOCH {epoch}/{total_epochs}")
-        print("─"*60)
+        print("\n" + "🚀 " * 20)
+        print(f"STARTING TRAINING SESSION: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("🚀 " * 20 + "\n")
 
-    def end_epoch(self, epoch, metrics):
-        elapsed = time.time() - self.epoch_start
+    def start_epoch(self, current, total):
+        """Called at the start of each epoch."""
+        self.epoch_start_time = time.time()
+        print(f"\n{'─'*60}")
+        print(f"🔄 EPOCH {current}/{total} STARTED")
+        print(f"{'─'*60}")
+
+    def log_metrics(self, epoch, total_epochs, metrics):
+        """Parses and prints metrics after an epoch."""
+        elapsed = time.time() - self.epoch_start_time
         total_elapsed = time.time() - self.start_time
+        
+        # Robust metric extraction (handles both Dict and Class interfaces from YOLO)
+        def get_val(key_chain, default=0):
+            val = metrics
+            for k in key_chain:
+                val = getattr(val, k, val.get(k) if isinstance(val, dict) else default)
+            return val
 
-        print("\n📊 Metrics:")
-        # metrics potrebbe essere dict oppure un oggetto: gestiamo entrambi i casi
+        # Handle different YOLO version outputs
         if isinstance(metrics, dict):
-            m_map50 = metrics.get('metrics/mAP50', metrics.get('metrics/mAP50(B)', 0))
-            m_map5095 = metrics.get('metrics/mAP50-95', metrics.get('metrics/mAP50-95(B)', 0))
-            precision = metrics.get('metrics/precision', metrics.get('metrics/precision(B)', 0))
-            recall = metrics.get('metrics/recall', metrics.get('metrics/recall(B)', 0))
+             # Dictionary access
+            map50 = metrics.get('metrics/mAP50(B)', metrics.get('metrics/mAP50', 0))
+            map5095 = metrics.get('metrics/mAP50-95(B)', metrics.get('metrics/mAP50-95', 0))
+            prec = metrics.get('metrics/precision(B)', metrics.get('metrics/precision', 0))
+            rec = metrics.get('metrics/recall(B)', metrics.get('metrics/recall', 0))
         else:
-            # qualche versione della libreria può ritornare oggetti con attributi
-            m_map50 = getattr(getattr(metrics, 'box', metrics), 'map50', getattr(metrics, 'map50', 0))
-            m_map5095 = getattr(getattr(metrics, 'box', metrics), 'map', getattr(metrics, 'map', 0))
-            precision = getattr(getattr(metrics, 'box', metrics), 'mp', getattr(metrics, 'precision', 0))
-            recall = getattr(getattr(metrics, 'box', metrics), 'mr', getattr(metrics, 'recall', 0))
+             # Object attribute access
+            map50 = getattr(metrics, 'map50', 0)
+            map5095 = getattr(metrics, 'map', 0)
+            prec = getattr(getattr(metrics, 'box', metrics), 'mp', 0)
+            rec = getattr(getattr(metrics, 'box', metrics), 'mr', 0)
 
-        print(f"  mAP@50:     {m_map50:.4f}")
-        print(f"  mAP@50-95:  {m_map5095:.4f}")
-        print(f"  Precision:  {precision:.4f}")
-        print(f"  Recall:     {recall:.4f}")
+        # Visual Output
+        print(f"\n📊 EPOCH {epoch} METRICS:")
+        print(f"   • mAP@50:    {map50:.4f}")
+        print(f"   • mAP@50-95: {map5095:.4f}")
+        print(f"   • Precision: {prec:.4f}")
+        print(f"   • Recall:    {rec:.4f}")
+        print(f"\n⏱️  Timing: {elapsed/60:.1f} min/epoch | Total: {total_elapsed/3600:.1f} hours")
 
-        print(f"\n⏱️  Epoch time: {elapsed/60:.1f}m | Total: {total_elapsed/3600:.1f}h")
-
-        # Progress bar visuale: usa total_epochs memorizzato
-        total_epochs = getattr(self, 'total_epochs', None) or epoch
+        # Progress Bar
         progress = epoch / total_epochs
-        bar_length = 40
-        filled = int(bar_length * progress)
-        bar = "█" * filled + "░" * (bar_length - filled)
-        print(f"Progress: [{bar}] {progress*100:.1f}%")
+        filled_len = int(40 * progress)
+        bar = "█" * filled_len + "░" * (40 - filled_len)
+        print(f"   Progress: [{bar}] {progress*100:.1f}%")
 
+# Global logger instance for callbacks
 logger = TrainingLogger()
 
-# ==================== CALLBACK PERSONALIZZATO ====================
-def on_train_epoch_end(trainer):
-    """Callback chiamato alla fine di ogni epoca"""
-    metrics = trainer.metrics
-    epoch = trainer.epoch + 1
-    logger.end_epoch(epoch, metrics)
-
-def on_train_start(trainer):
-    """Callback chiamato all'inizio del training"""
-    logger.start_training()
-    print("\n🚀 Training started!")
-
-def on_train_epoch_start(trainer):
-    """Callback chiamato all'inizio di ogni epoca"""
-    logger.start_epoch(trainer.epoch + 1, trainer.epochs)
-
-# ==================== VERIFICA DATASET ====================
-def verify_dataset():
-    """Verifica integrità del dataset"""
-    print("\n🔍 Verifying dataset...")
-    
-    yaml_path = DATASET_PATH / DATA_YAML
-    if not yaml_path.exists():
-        print(f"❌ {DATA_YAML} not found!")
-        print(f"   Expected at: {yaml_path.absolute()}")
-        print("\n💡 Make sure you have:")
-        print("   1. Downloaded the dataset from Roboflow")
-        print("   2. Created data_basketball.yaml with correct paths")
-        sys.exit(1)
-    
-    with open(yaml_path, 'r') as f:
-        data = yaml.safe_load(f)
-    
-    # Verifica directories
-    for split in ['train', 'val', 'test']:
-        img_dir = DATASET_PATH / data[split]
-        lbl_dir = DATASET_PATH / split / 'labels'
+# ==============================================================================
+# 3. HELPER CLASSES
+# ==============================================================================
+class DatasetValidator:
+    """
+    Ensures the dataset structure and YAML configuration are correct before starting.
+    """
+    @staticmethod
+    def validate():
+        print("🔍 Validating dataset configuration...")
         
-        if not img_dir.exists():
-            print(f"❌ Images directory not found: {img_dir}")
+        yaml_path = Config.DATASET_DIR / Config.DATA_YAML
+        
+        # Check YAML existence
+        if not yaml_path.exists():
+            print(f"❌ Critical Error: {Config.DATA_YAML} not found at {yaml_path.absolute()}")
             sys.exit(1)
-        if not lbl_dir.exists():
-            print(f"❌ Labels directory not found: {lbl_dir}")
+            
+        # Parse YAML
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+            
+        # Verify Paths
+        status_ok = True
+        for split_key in ['train', 'val', 'test']:
+            if split_key in data:
+                # Construct absolute path to image directory
+                img_path = Config.DATASET_DIR / data[split_key]
+                if not img_path.exists():
+                    print(f"❌ Missing {split_key} directory: {img_path}")
+                    status_ok = False
+                else:
+                    count = len(list(img_path.glob('*.*')))
+                    print(f"✅ {split_key.upper()}: Found {count} images.")
+        
+        if not status_ok:
+            print("\n⛔ Dataset validation failed. Please check paths in data.yaml.")
             sys.exit(1)
-        
-        img_count = len(list(img_dir.glob('*.jpg'))) + len(list(img_dir.glob('*.png')))
-        lbl_count = len(list(lbl_dir.glob('*.txt')))
-        
-        print(f"✅ {split:5s}: {img_count:4d} images, {lbl_count:4d} labels")
-    
-    print(f"\n📋 Classes: {data['names']}")
-    print(f"✅ Dataset verification passed!\n")
-    
-    return yaml_path
+            
+        print(f"📋 Classes: {data.get('names', 'Unknown')}")
+        print("✅ Dataset validation passed!\n")
+        return str(yaml_path.absolute())
 
-# ==================== TRAINING ====================
-def train_model():
-    """Funzione principale di training"""
-    print("="*60)
-    print("🏀 BASKETBALL DETECTION - YOLO11s TRAINING")
-    print("   5 Classes: ball, ball-in-basket, player, basket, player-shooting")
-    print("="*60)
-    print(f"📅 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🎯 Model: {BASE_MODEL}")
-    print(f"💾 Dataset: {DATASET_PATH}")
-    print(f"🖥️  Hardware: GTX 1060 6GB + 16GB RAM + i7-6700K")
-    print(f"🔄 Resume: {'YES ✅' if RESUME_TRAINING else 'NO (Fresh start)'}")
-    if RESUME_TRAINING:
-        print(f"📂 Checkpoint: {RESUME_PATH}")
-    print("="*60)
-    
-    # Verifica dataset
-    yaml_path = verify_dataset()
-    
-    # ==================== GPU INFO ====================
-    print("\n" + "="*60)
-    print("🖥️  GPU INFORMATION")
-    print("="*60)
-    if torch.cuda.is_available():
-        print(f"✅ CUDA Available: {torch.version.cuda}")
-        print(f"📊 GPU: {torch.cuda.get_device_name(0)}")
-        print(f"💾 VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-        print(f"🔥 Current VRAM Usage: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
-    else:
-        print("❌ CUDA not available - Training will be VERY slow on CPU!")
-        response = input("Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            sys.exit(0)
-    print("="*60)
-    
-    # ==================== CARICA MODELLO ====================
-    print("\n📦 Loading model...")
-    if RESUME_TRAINING:
-        model = YOLO(str(RESUME_PATH))
-        print(f"✅ Loaded checkpoint: {RESUME_PATH}")
-    else:
-        model = YOLO(BASE_MODEL)
-        print(f"✅ Loaded base model: {BASE_MODEL}")
-    
+class InterruptionHandler:
+    """
+    Handles CTRL+C signals to save state gracefully.
+    """
+    def __init__(self):
+        signal.signal(signal.SIGINT, self._handle_signal)
+        
+    def _handle_signal(self, sig, frame):
+        print("\n\n" + "⚠️ " * 20)
+        print("TRAINING INTERRUPTED BY USER (SIGINT)")
+        print("⚠️ " * 20)
+        print(f"📁 Last checkpoint is saved at: {Config.RESUME_PATH}")
+        print("🔄 To resume, simply run this script again.")
+        sys.exit(0)
 
-    # CALLBACKS 
-    model.add_callback('on_train_start', on_train_start)
-    model.add_callback('on_train_epoch_start', on_train_epoch_start)
-    model.add_callback('on_train_epoch_end', on_train_epoch_end)
-
-    # ==================== PARAMETRI TRAINING ====================
-    print("\n" + "="*60)
-    print("⚙️  TRAINING PARAMETERS")
-    print("="*60)
-    
-    params = {
-        # Core
-        'data': str(yaml_path),
-        'epochs': 200,              # ↑ Aumentato per 5 classi
-        'batch': 8,                # Ottimale per 1060 6GB
-        'imgsz': 640,
-        'device': 0,
-        'patience': 30,             # ↑ Più pazienza per convergenza
-        'save': True,
-        'save_period': 5,           # Salva ogni 5 epoch
-        'cache': 'disk',            # Usa disk cache (più lento ma risparmia RAM)
-        'workers': 0,               # ⚠️ WINDOWS: deve essere 0!
-        'project': 'basketball_training',
-        'name': 'yolo11s_5classes',
-        'exist_ok': True,
-        'pretrained': True,
-        'optimizer': 'AdamW',
-        'verbose': True,
-        'seed': 42,
-        'deterministic': False,
-        'cos_lr': True,             # Cosine learning rate decay
-        'close_mosaic': 15,         # Disabilita mosaic negli ultimi 15 epoch
-        'amp': True,               
-        'fraction': 1.0,            # Usa tutto il dataset
+# ==============================================================================
+# 4. TRAINING LOGIC
+# ==============================================================================
+class TrainingSession:
+    def __init__(self):
+        self.resume_training = Config.RESUME_PATH.exists()
+        self.interruption_handler = InterruptionHandler()
         
-        # ==================== LEARNING RATES ====================
-        'lr0': 0.01,                # Initial learning rate
-        'lrf': 0.001,               # Final learning rate (lr0 * lrf)
-        'momentum': 0.937,
-        'weight_decay': 0.0005,
-        'warmup_epochs': 3.0,
-        'warmup_momentum': 0.8,
-        'warmup_bias_lr': 0.1,
+    def _check_hardware(self):
+        print(f"{'='*60}")
+        print("🖥️  HARDWARE DIAGNOSTICS")
+        print(f"{'='*60}")
         
-        # ==================== LOSS WEIGHTS ====================
-        'box': 7.5,                 # Box loss weight
-        'cls': 0.5,                 # Class loss weight
-        'dfl': 1.5,                 # DFL loss weight
-        
-        # ==================== DATA AUGMENTATION ====================
-        # Ottimizzato per tracking palla in movimento
-        'hsv_h': 0.015,             # HSV-Hue augmentation
-        'hsv_s': 0.7,               # HSV-Saturation
-        'hsv_v': 0.4,               # HSV-Value
-        'degrees': 10.0,            # ↑ Rotation augmentation (più variabilità)
-        'translate': 0.1,           # Translation
-        'scale': 0.6,               # ↑ Scale augmentation
-        'shear': 2.0,               # ↑ Shear (importante per prospettive canestro)
-        'perspective': 0.0005,      # ↑ Perspective warp (canestro da angoli diversi)
-        'flipud': 0.0,              # NO vertical flip (basket non si ribalta)
-        'fliplr': 0.5,              # Horizontal flip (campo simmetrico)
-        'mosaic': 1.0,              # Mosaic augmentation
-        'mixup': 0.15,              # ↑ Mixup (aiuta con occlusioni)
-        'copy_paste': 0.1,          # ↑ Copy-paste augmentation
-        'auto_augment': 'randaugment',  # ⭐ RandAugment per variabilità
-        'erasing': 0.4,             # ⭐ Random erasing (simula occlusioni)
-        
-        # ==================== MOTION BLUR SIMULATION ====================
-        # YOLO11 non ha motion blur nativo, ma randaugment lo include parzialmente
-        
-        # ==================== ADVANCED ====================
-        'overlap_mask': True,       # Masks can overlap
-        'mask_ratio': 4,            # Mask downsample ratio
-        'dropout': 0.0,             # Dropout (0 = disabled)
-        'val': True,                # Validate during training
-        'plots': True,              # Save plots
-        'save_json': False,         # Save results to JSON
-        'conf': None,               # Confidence threshold (None = default)
-        'iou': 0.7,                 # IoU threshold for NMS
-        'max_det': 300,             # Max detections per image
-        'half': False,            
-        'dnn': False,               # Use OpenCV DNN
-        'rect': False,              # Rectangular training
-        'resume': RESUME_TRAINING,  # Resume from checkpoint
-        'freeze': None,             # Freeze layers
-        'multi_scale': True,        # ⭐ Multi-scale training (importante!)
-        
-        
-    }
-    
-    # Print parametri chiave
-    print("Core Settings:")
-    print(f"  Epochs: {params['epochs']}")
-    print(f"  Batch: {params['batch']}")
-    print(f"  Image Size: {params['imgsz']}")
-    print(f"  Workers: {params['workers']} (Windows compatibility)")
-    print(f"  Cache: {params['cache']}")
-    print(f"  Multi-scale: {params['multi_scale']}")
-    
-    print("\nAugmentation (Motion & Perspective):")
-    print(f"  Rotation: ±{params['degrees']}°")
-    print(f"  Scale: {params['scale']}")
-    print(f"  Shear: {params['shear']}")
-    print(f"  Perspective: {params['perspective']}")
-    print(f"  Mixup: {params['mixup']}")
-    print(f"  Random Erasing: {params['erasing']}")
-    print(f"  Auto Augment: {params['auto_augment']}")
-    
-    print("\nLearning Rate:")
-    print(f"  Initial: {params['lr0']}")
-    print(f"  Final: {params['lrf']}")
-    print(f"  Scheduler: Cosine")
-    
-    print("\n" + "="*60)
-    print("⏱️  ESTIMATED TIME")
-    print("="*60)
-    print(f"  ~15-20 hours for {params['epochs']} epochs")
-    print(f"  ~4.5-6 min/epoch average")
-    print(f"  Checkpoint auto-saved every {params['save_period']} epochs")
-    print("="*60)
-    
-    print("\n💡 TIPS:")
-    print("  • Press Ctrl+C to pause (checkpoint saved)")
-    print("  • Run script again to resume from last checkpoint")
-    print("  • Monitor GPU usage: watch -n 1 nvidia-smi")
-    print("  • Check results: basketball_training/yolo11s_5classes/")
-    print("="*60)
-    
-    input("\n👉 Press ENTER to start training or Ctrl+C to cancel...")
-    
-    # ==================== START TRAINING ====================
-    print("\n" + "🚀 "*30)
-    print("TRAINING STARTED!")
-    print("🚀 "*30 + "\n")
-    
-    try:
-        results = model.train(**params)
-        
-        # ==================== TRAINING COMPLETATO ====================
-        print("\n\n" + "🎉"*30)
-        print("✅ TRAINING COMPLETED SUCCESSFULLY!")
-        print("🎉"*30)
-        
-        print("\n" + "="*60)
-        print("📊 FINAL RESULTS")
-        print("="*60)
-        
-        # Validazione finale
-        val_results = model.val()
-
-        # Estrai metriche in modo robusto (supporta dict o oggetto)
-        if isinstance(val_results, dict):
-            vm_map50 = val_results.get('metrics/mAP50', val_results.get('metrics/mAP50(B)', 0))
-            vm_map5095 = val_results.get('metrics/mAP50-95', val_results.get('metrics/mAP50-95(B)', 0))
-            vprecision = val_results.get('metrics/precision', val_results.get('metrics/precision(B)', 0))
-            vrecall = val_results.get('metrics/recall', val_results.get('metrics/recall(B)', 0))
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            vram_allocated = torch.cuda.memory_allocated(0) / 1e9
+            print(f"✅ CUDA Available: {torch.version.cuda}")
+            print(f"🚀 GPU: {gpu_name}")
+            print(f"💾 VRAM: {vram_total:.1f} GB Total | {vram_allocated:.2f} GB Allocated")
         else:
-            # prova ad accedere come oggetto
-            vm_map50 = getattr(getattr(val_results, 'box', val_results), 'map50', getattr(val_results, 'map50', 0))
-            vm_map5095 = getattr(getattr(val_results, 'box', val_results), 'map', getattr(val_results, 'map', 0))
-            vprecision = getattr(getattr(val_results, 'box', val_results), 'mp', getattr(val_results, 'precision', 0))
-            vrecall = getattr(getattr(val_results, 'box', val_results), 'mr', getattr(val_results, 'recall', 0))
+            print("❌ CUDA NOT DETECTED. Training on CPU is extremely slow.")
+            user_input = input("   Continue anyway? (y/n): ")
+            if user_input.lower() != 'y':
+                sys.exit(0)
+        print(f"{'='*60}\n")
 
-        print(f"\n🎯 Performance Metrics:")
-        print(f"  mAP@50:     {vm_map50:.4f} {'✅' if vm_map50 >= 0.90 else '⚠️'}")
-        print(f"  mAP@50-95:  {vm_map5095:.4f}")
-        print(f"  Precision:  {vprecision:.4f} {'✅' if vprecision >= 0.90 else '⚠️'}")
-        print(f"  Recall:     {vrecall:.4f} {'✅' if vrecall >= 0.90 else '⚠️'}")
+    def _setup_callbacks(self, model):
+        """Attaches custom logging callbacks to the YOLO model."""
+        def on_train_epoch_start(trainer):
+            logger.start_epoch(trainer.epoch + 1, trainer.epochs)
+            
+        def on_train_epoch_end(trainer):
+            logger.log_metrics(trainer.epoch + 1, trainer.epochs, trainer.metrics)
+            
+        def on_train_start(trainer):
+            logger.start_session()
+            
+        model.add_callback('on_train_start', on_train_start)
+        model.add_callback('on_train_epoch_start', on_train_epoch_start)
+        model.add_callback('on_train_epoch_end', on_train_epoch_end)
 
-        # Verifica target
-        if vm_map50 >= 0.90 and vprecision >= 0.90 and vrecall >= 0.90:
-            print("\n✅ TARGET ACHIEVED! All metrics ≥ 90%")
+    def run(self):
+        # 1. Validate Dataset
+        yaml_path = DatasetValidator.validate()
+        
+        # 2. Check Hardware
+        self._check_hardware()
+        
+        # 3. Load Model
+        print("📦 Loading YOLO Model...")
+        if self.resume_training:
+            print(f"🔄 Resuming from checkpoint: {Config.RESUME_PATH}")
+            model = YOLO(str(Config.RESUME_PATH))
         else:
-            print("\n⚠️  Target not fully achieved. Consider:")
-            print("  • Increase epochs")
-            print("  • Fine-tune augmentation parameters")
-            print("  • Check dataset quality")
-
+            print(f"🆕 Starting fresh from base model: {Config.BASE_MODEL}")
+            model = YOLO(Config.BASE_MODEL)
+            
+        # 4. Setup Callbacks
+        self._setup_callbacks(model)
         
-    except KeyboardInterrupt:
-        print("\n\n" + "⚠️ "*30)
-        print("TRAINING INTERRUPTED BY USER")
-        print("⚠️ "*30)
-        print(f"\n📁 Last checkpoint saved: {RESUME_PATH}")
-        print("🔄 To resume: Run this script again")
-        print("="*60)
+        # 5. Build Training Arguments
+        # Merging core config with augmentation settings
+        train_args = {
+            'data': yaml_path,
+            'project': Config.PROJECT_NAME,
+            'name': Config.RUN_NAME,
+            'epochs': Config.EPOCHS,
+            'batch': Config.BATCH_SIZE,
+            'imgsz': Config.IMG_SIZE,
+            'device': Config.DEVICE,
+            'workers': Config.WORKERS,
+            'optimizer': Config.OPTIMIZER,
+            'patience': Config.PATIENCE,
+            'save': True,
+            'save_period': Config.SAVE_PERIOD,
+            'cache': 'disk', # Reduces RAM usage
+            'exist_ok': True,
+            'pretrained': True,
+            'verbose': True, # Keep internal verbose logging
+            'seed': Config.SEED,
+            'cos_lr': Config.COS_LR,
+            'close_mosaic': 15, # Disable mosaic for last 15 epochs for finer detail
+            
+            # Hyperparameters
+            'lr0': Config.LR0,
+            'lrf': Config.LRF,
+            'momentum': Config.MOMENTUM,
+            'weight_decay': Config.WEIGHT_DECAY,
+            'warmup_epochs': Config.WARMUP_EPOCHS,
+            'box': Config.BOX_GAIN,
+            'cls': Config.CLS_GAIN,
+            'dfl': Config.DFL_GAIN,
+            
+            # Flatten augmentation dict into arguments
+            **Config.AUGMENTATION,
+            
+            # Misc
+            'resume': self.resume_training,
+            'val': True,
+            'plots': True,
+            'multi_scale': True # Helps detection at different distances
+        }
         
-    except Exception as e:
-        print(f"\n\n❌ ERROR DURING TRAINING:")
-        print(f"   {str(e)}")
-        print(f"\n📁 Check logs at: basketball_training/yolo11s_5classes/")
-        raise
+        # 6. Start Training
+        print(f"\n🎯 Target: {Config.EPOCHS} Epochs | Batch Size: {Config.BATCH_SIZE}")
+        print("⏳ Initializing training pipeline (this might take a minute)...")
+        
+        try:
+            results = model.train(**train_args)
+            self._finalize(model)
+        except Exception as e:
+            print(f"\n❌ FATAL ERROR DURING TRAINING: {e}")
+            raise e
 
-if __name__ == '__main__':
-    print("\n")
-    print("🏀 "*30)
-    print(" "*20 + "BASKETBALL YOLO11 TRAINING")
-    print("🏀 "*30)
-    print("\n")
-    
-    train_model()
+    def _finalize(self, model):
+        """Final validation and success message."""
+        print("\n" + "🎉" * 20)
+        print("TRAINING COMPLETED SUCCESSFULLY")
+        print("🎉" * 20)
+        
+        print("\n🔍 Running Final Validation...")
+        metrics = model.val()
+        
+        # Check if we hit the 90% target (Approximate check)
+        try:
+            map50 = metrics.box.map50
+            if map50 > 0.90:
+                print(f"\n✅ SUCCESS: Model achieved >90% mAP@50 ({map50:.2f})")
+            else:
+                print(f"\n⚠️ NOTE: Model reached {map50:.2f} mAP@50. Consider more epochs or more data.")
+        except:
+            pass
+            
+        print(f"📁 Final weights saved at: {Config.PROJECT_NAME}/{Config.RUN_NAME}/weights/best.pt")
+
+# ==============================================================================
+# 5. MAIN ENTRY POINT
+# ==============================================================================
+if __name__ == "__main__":
+    session = TrainingSession()
+    session.run()
