@@ -218,13 +218,47 @@ The training script (`train_model.py`) uses specialized augmentation for sports 
 
 ## 📸 Screenshots
 
-| Upload Interface | Real-time Analysis |
-|------------------|-------------------|
-| ![Upload Interface](FE/public/upload-interface.png) | ![Real-time Analysis](FE/public/realtime-analysis.png) |
+### Main Interface
+<div align="center">
+  <img src="FE/public/1.png" alt="Main Menu" width="800">
+  <p><em>Upload interface with processing mode selection</em></p>
+</div>
 
-| Advanced Settings | Final Result |
-|------------------|--------------|
-| ![Advanced Settings](FE/public/advanced-settings.png) | ![Final Result](FE/public/final-result.png) |
+### Advanced Model Settings
+<div align="center">
+  <img src="FE/public/2.png" alt="Advanced Settings" width="800">
+  <p><em>Fine-tune confidence thresholds for each detection class</em></p>
+</div>
+
+### Ready to Process
+<div align="center">
+  <img src="FE/public/4.png" alt="Video Loaded" width="800">
+  <p><em>Video uploaded and ready for analysis</em></p>
+</div>
+
+### Processing in Progress
+<div align="center">
+  <img src="FE/public/5.png" alt="Processing Progress" width="800">
+  <p><em>Real-time progress tracking with live statistics updates</em></p>
+</div>
+
+### Processing Complete
+<div align="center">
+  <img src="FE/public/6.png" alt="Processing Complete" width="800">
+  <p><em>Analysis finished - ready to download the processed video</em></p>
+</div>
+
+### Output Example
+<div align="center">
+  <img src="FE/public/7.png" alt="Video Output Example" width="800">
+  <p><em>Example of processed video with tracking overlays and statistics</em></p>
+</div>
+
+### 🎥 Sample Output Video
+
+Check out a full example of SwishAI in action: [**View Sample Output Video**](https://github.com/sPappalard/SwishAI/blob/main/samples/output_example.mp4)
+
+> **Note**: To add the sample video to your repository, create a `samples` folder in the root directory and upload your example video as `output_example.mp4`.
 
 ---
 
