@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="FE/public/logo.png" alt="SwishAI Logo" width="200">
+  <img src="FE/public/logo.png" alt="SwishAI Logo" width="300">
 </div>
 
 # 🏀 SwishAI - Basketball Shot Analysis & Tracking
