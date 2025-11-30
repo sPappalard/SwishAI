@@ -1,4 +1,4 @@
-# <img src="FE/public/logo.png" width="50" alt="SwishAI Logo"> SwishAI - Basketball Shot Analysis & Tracking
+# <img src="FE/public/logo.png" width="100" alt="SwishAI Logo"> SwishAI - Basketball Shot Analysis & Tracking
 
 SwishAI is a state-of-the-art Computer Vision application designed to analyze basketball shots from video footage automatically. Powered by YOLOv11 and a modern React + FastAPI stack, it tracks players, basketballs, and hoops in real-time, calculating shooting percentage and visualizing successful shots with dynamic overlays.
 
