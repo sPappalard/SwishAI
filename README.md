@@ -56,6 +56,7 @@ SwishAI is a state-of-the-art Computer Vision application designed to analyze ba
 ---
 
 ## 📂 Project Architecture
+
 ```
 SwishAI/
 ├── BE/                           # Backend (Python)
@@ -90,11 +91,12 @@ SwishAI/
 
 Before running the app, you need to train the model (or use pre-trained weights).
 
-**Download Dataset**: Get the basketball detection dataset from [Roboflow Universe](https://universe.roboflow.com).
+**Download Dataset**: Get the basketball detection dataset from [Roboflow Universe](https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd).
 
 **Configure Training**:
 - Ensure the dataset is extracted into `BE/basketball-detection-srfkd-1`
 - Check `train_model.py` config class:
+
 ```python
 DATASET_DIR = Path("basketball-detection-srfkd-1")
 EPOCHS = 200
@@ -102,6 +104,7 @@ BATCH_SIZE = 8  # Adjust based on your VRAM
 ```
 
 **Run Training**:
+
 ```bash
 cd BE
 python train_model.py
@@ -112,11 +115,13 @@ This script handles auto-validation, GPU checks, and custom augmentation.
 ### 2. Backend Setup
 
 Navigate to the backend directory:
+
 ```bash
 cd BE
 ```
 
 Create and activate a virtual environment:
+
 ```bash
 python -m venv venv
 
@@ -128,11 +133,13 @@ source venv/bin/activate
 ```
 
 Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 Start the API server:
+
 ```bash
 python app.py
 ```
@@ -142,16 +149,19 @@ Server will run at `http://localhost:8000`.
 ### 3. Frontend Setup
 
 Navigate to the frontend directory:
+
 ```bash
 cd FE
 ```
 
 Install packages:
+
 ```bash
 npm install
 ```
 
 Start the development server:
+
 ```bash
 npm run dev
 ```
@@ -206,18 +216,36 @@ The training script (`train_model.py`) uses specialized augmentation for sports 
 
 | Upload Interface | Real-time Analysis |
 |------------------|-------------------|
-| ![Upload Interface](placeholder) | ![Real-time Analysis](placeholder) |
+| ![Upload Interface](FE/public/upload-interface.png) | ![Real-time Analysis](FE/public/realtime-analysis.png) |
 
 | Advanced Settings | Final Result |
 |------------------|--------------|
-| ![Advanced Settings](placeholder) | ![Final Result](placeholder) |
+| ![Advanced Settings](FE/public/advanced-settings.png) | ![Final Result](FE/public/final-result.png) |
 
 ---
 
 ## 📜 Credits
 
 - **Developer**: sPappalard
-- **Dataset**: [Roboflow Universe - Basketball Detection](https://universe.roboflow.com)
+- **Dataset**: [Roboflow Universe - Basketball Detection](https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd)
 - **Frameworks**: Ultralytics YOLO, FastAPI, React
+
+### Dataset Citation
+
+```bibtex
+@misc{
+    basketball-detection-srfkd_dataset,
+    title = { Basketball detection Dataset },
+    type = { Open Source Dataset },
+    author = { basketball },
+    howpublished = { \url{ https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd } },
+    url = { https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd },
+    journal = { Roboflow Universe },
+    publisher = { Roboflow },
+    year = { 2025 },
+    month = { mar },
+    note = { visited on 2025-11-30 },
+}
+```
 
 Made with ❤️ and Python.
