@@ -1,5 +1,5 @@
 """
-🏀 BASKETBALL DETECTION - YOLO11 Training Script (Refactored)
+🏀 BASKETBALL DETECTION - YOLO11 Training Script
 =============================================================
 This script handles the training process for the basketball detection model.
 It includes:
@@ -9,8 +9,6 @@ It includes:
 4. Custom logging and metrics visualization.
 5. Optimized hyperparameters for basketball motion tracking.
 
-Author: Refactored by Gemini
-Target: 90%+ mAP@50 on 5 classes
 """
 
 import sys
@@ -35,25 +33,25 @@ class Config:
     RUN_NAME = "yolo11s_5classes"
     DATASET_DIR = Path("basketball-detection-srfkd-1")
     DATA_YAML = "data_basketball.yaml"
-    BASE_MODEL = "yolo11s.pt"  # Starting point (Pre-trained COCO)
+    BASE_MODEL = "yolo11s.pt"  # Starting point (Pre-trained: YOLO SMALL)
     
     # --- Checkpoint Handling ---
     RESUME_PATH = Path(f"{PROJECT_NAME}/{RUN_NAME}/weights/last.pt")
     
     # --- Hardware & System ---
-    WORKERS = 0        # Set to 0 for Windows compatibility to avoid multiprocessing errors
-    DEVICE = 0         # GPU Index (0 for the first GPU)
-    SEED = 42          # Fixed seed for reproducibility
+    WORKERS = 0        # How many processors load the images (Set to 0 for Windows compatibility to avoid multiprocessing errors)
+    DEVICE = 0         # GPU Index (0 = Pytorch will use the GPU first, if it is available)
+    SEED = 42          # Locks the random seed to guarantee consistent training outcomes across runs.
     
     # --- Core Training Hyperparameters ---
     EPOCHS = 200       # Total number of training epochs
-    BATCH_SIZE = 8     # Batch size (Adjust based on VRAM, 8 is good for 6GB VRAM)
+    BATCH_SIZE = 8     # Batch size: the model studies 8 images at a time before updating the "brain" (Adjust based on my VRAM, 8 is good for 6GB VRAM)
     IMG_SIZE = 640     # Input image resolution
     PATIENCE = 30      # Early stopping patience (epochs without improvement)
-    SAVE_PERIOD = 5    # Save heavy checkpoints every X epochs
-    OPTIMIZER = 'AdamW'
+    SAVE_PERIOD = 5    # Save heavy checkpoints every 5 epochs
+    OPTIMIZER = 'AdamW'     #Adaptive Moment Estimation Weight decay: Modern optimizer that balances fast learning with good generalization. The best for this useCase
     
-    # --- Learning Rate Strategy ---
+    # --- Learning Rate Strategy --- Controls learning speed dynamics: starts with a warmup, uses momentum for stability, and decays smoothly over time.
     LR0 = 0.01         # Initial learning rate (SGD=1E-2, Adam=1E-3)
     LRF = 0.001        # Final learning rate (lr0 * lrf)
     MOMENTUM = 0.937
@@ -61,7 +59,7 @@ class Config:
     WARMUP_EPOCHS = 3.0
     COS_LR = True      # Use Cosine LR scheduler
     
-    # --- Loss Function Weights ---
+    # --- Loss Function Weights --- Heavily penalizes bounding box errors to ensure tracking precision on moving targets.
     # Adjusted to prioritize bounding box accuracy over classification
     BOX_GAIN = 7.5     # Box loss gain
     CLS_GAIN = 0.5     # Class loss gain
@@ -70,9 +68,11 @@ class Config:
     # --- Data Augmentation (Optimized for Sports/Motion) ---
     # Heavy augmentation helps YOLO generalize on limited datasets
     AUGMENTATION = {
+        #color and light
         'hsv_h': 0.015,     # HSV-Hue adjustment
         'hsv_s': 0.7,       # HSV-Saturation adjustment
         'hsv_v': 0.4,       # HSV-Value adjustment
+        #geometry and position
         'degrees': 10.0,    # Rotation (+/- deg)
         'translate': 0.1,   # Translation (+/- fraction)
         'scale': 0.6,       # Scale gain (+/- gain)
@@ -80,6 +80,7 @@ class Config:
         'perspective': 0.0005, # Perspective warp
         'flipud': 0.0,      # Vertical flip (Disabled: gravity matters)
         'fliplr': 0.5,      # Horizontal flip (Enabled: courts are symmetric)
+        #advanced
         'mosaic': 1.0,      # Mosaic (Probability)
         'mixup': 0.15,      # Mixup (Probability) - Helps with player overlap
         'copy_paste': 0.1,  # Segment copy-paste (Probability)
@@ -117,14 +118,7 @@ class TrainingLogger:
         elapsed = time.time() - self.epoch_start_time
         total_elapsed = time.time() - self.start_time
         
-        # Robust metric extraction (handles both Dict and Class interfaces from YOLO)
-        def get_val(key_chain, default=0):
-            val = metrics
-            for k in key_chain:
-                val = getattr(val, k, val.get(k) if isinstance(val, dict) else default)
-            return val
-
-        # Handle different YOLO version outputs
+        # Handle different YOLO version outputs (sometimes YOLO return a dictionary, sometimes an object: both cases are handled)
         if isinstance(metrics, dict):
              # Dictionary access
             map50 = metrics.get('metrics/mAP50(B)', metrics.get('metrics/mAP50', 0))
@@ -275,7 +269,7 @@ class TrainingSession:
         self._setup_callbacks(model)
         
         # 5. Build Training Arguments
-        # Merging core config with augmentation settings
+        # Merging core config (what YOLO expects) with augmentation settings
         train_args = {
             'data': yaml_path,
             'project': Config.PROJECT_NAME,
@@ -322,7 +316,9 @@ class TrainingSession:
         print("⏳ Initializing training pipeline (this might take a minute)...")
         
         try:
+            #start training
             results = model.train(**train_args)
+            #end training
             self._finalize(model)
         except Exception as e:
             print(f"\n❌ FATAL ERROR DURING TRAINING: {e}")

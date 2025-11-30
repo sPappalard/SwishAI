@@ -1,11 +1,3 @@
-"""
-🏀 BASKETBALL TRACKER API - REFACTORED & OPTIMIZED
-==================================================
-Modular structure for better readability and performance.
-All comments and logs are in English.
-Includes explicit Processing Modes and Auto-Cleanup.
-"""
-
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -17,10 +9,10 @@ import shutil
 import uuid
 import uvicorn
 import threading
-import os
 from collections import deque
 from enum import Enum
 import time
+import json  # Added to parse custom thresholds
 
 # ==================== CONFIGURATION ====================
 class Config:
@@ -39,8 +31,8 @@ class Config:
     CLEANUP_INTERVAL = 60       # Run cleanup check every 60 seconds
 
     # Physics & Rules (Time in seconds)
-    SHOT_COOLDOWN = 1.5
-    BASKET_COOLDOWN = 2.0
+    SHOT_COOLDOWN = 1.5     # if the model recognizes a shot,  it wait 1.5 seconds before counting another. Prevente a single shot from being counted 10 times in 10 consecutive frames 
+    BASKET_COOLDOWN = 2.0   # the same for the basket recognition 
     ANIMATION_DURATION = 2.0
 
     # Confidence Thresholds
@@ -131,7 +123,7 @@ class AutoCleanup:
                             deleted_count += 1
                         except Exception: pass
 
-                # 3. Clean Memory (Status Dictionary)
+                # 3. Clean Memory (Status Dictionary) (To avoid Memory Leak)
                 # Remove keys that haven't been updated in a while (using a simplified heuristic here)
                 # Since we don't timestamp status updates, we'll just check if the file exists on disk.
                 # If file is gone (deleted above), remove status.
@@ -162,6 +154,7 @@ class GameStats:
         self.shots_attempted = 0
         self.baskets_made = 0
         
+        #calculate how many frames the cooldown lasts based on the FPS of the video
         self.shot_cooldown_frames = int(fps * Config.SHOT_COOLDOWN)
         self.basket_cooldown_frames = int(fps * Config.BASKET_COOLDOWN)
         self.anim_duration_frames = int(fps * Config.ANIMATION_DURATION)
@@ -173,6 +166,7 @@ class GameStats:
         self.last_known_basket_pos = None
         self.animation_frames = deque(maxlen=self.anim_duration_frames)
 
+    # called when the model recognized a player shooting 
     def register_shot(self, frame_idx):
         if frame_idx - self.last_shot_frame >= self.shot_cooldown_frames:
             self.shots_attempted += 1
@@ -180,8 +174,10 @@ class GameStats:
             return True
         return False
 
+    # called when the model recognized the ball in basket 
     def register_basket(self, frame_idx, position=None):
         if frame_idx - self.last_basket_frame >= self.basket_cooldown_frames:
+            # if there is a basket but there was no recent shot, it automatically adds a shot (because you can't score without shooting, so AI missed the shot)
             if (frame_idx - self.last_shot_frame) > (self.shot_cooldown_frames * 2):
                 self.shots_attempted += 1
                 self.last_shot_frame = frame_idx
@@ -197,6 +193,7 @@ class GameStats:
             return True
         return False
 
+    #calculate the shoot percentage (%)
     @property
     def accuracy(self):
         if self.shots_attempted == 0: return 0.0
@@ -211,6 +208,7 @@ class GameStats:
 class Visualizer:
     """Handles all drawing operations on the video frames."""
     
+    # Draw animation (pulsing concentric circles) when you score a basket. (Use math,sin and alpha, to make a fade effect)
     @staticmethod
     def draw_basket_effect(frame, center_pos, progress):
         if not center_pos: return
@@ -232,6 +230,7 @@ class Visualizer:
         cv2.circle(overlay, (cx, cy), int(15 * pulse), (0, 255, 255), -1)
         cv2.addWeighted(overlay, alpha * 0.7, frame, 1 - alpha * 0.3, 0, frame)
 
+    # Draw the scoreboard at the bottom (Shots, Baskets, Accuracy). Make it semi-transparent to make it readable.
     @staticmethod
     def draw_hud(frame, stats, w, h):
         panel_h, panel_w = 100, min(700, w - 30)
@@ -263,6 +262,7 @@ class Visualizer:
         if fill_w > 0:
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + 8), (0, 200, 255), -1)
 
+    # Creates the final green/gray screen with a summary of all statistics.
     @staticmethod
     def draw_final_screen(w, h, stats, total_frames, fps):
         canvas = np.zeros((h, w, 3), dtype=np.uint8)
@@ -287,18 +287,22 @@ class Visualizer:
 
 class VideoProcessor:
     """Manages the video processing loop."""
-    def __init__(self, file_id, input_path, output_path, test_mode, mode: ProcessingMode):
+    def __init__(self, file_id, input_path, output_path, test_mode, mode: ProcessingMode, thresholds: dict = None):
         self.file_id = file_id
         self.input_path = input_path
         self.output_path = output_path
         self.test_mode = test_mode
         self.mode = mode
+        # Use custom thresholds if provided, otherwise use defaults
+        self.thresholds = thresholds if thresholds else Config.THRESHOLDS
         
     def run(self):
         try:
+            # open video 
             cap = cv2.VideoCapture(str(self.input_path))
             if not cap.isOpened(): raise RuntimeError("Could not open video file.")
-                
+
+            # reading video settings (FPS, width, height, total frames)    
             fps = cap.get(cv2.CAP_PROP_FPS)
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -307,30 +311,38 @@ class VideoProcessor:
             if self.test_mode: max_frames = int(fps * Config.TEST_MODE_DURATION)
             else: max_frames = min(total_frames, int(fps * Config.MAX_DURATION_SECONDS))
             
+            # prepare a "blank cassette" where we'll record the edited video. It must have the same dimensions (width, height) and frame rate (fps) as the original.
             writer = cv2.VideoWriter(str(self.output_path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+            # prepare the "scoreboard" by resetting it
             stats = GameStats(fps)
             frame_idx = 0
             
             self._update_status("processing", 0, max_frames, stats)
             print(f"🎬 Processing {self.file_id} | Mode: {self.mode.value} | Frames: {max_frames}")
 
+            # read frame by frame using a while loop
             while cap.isOpened() and frame_idx < max_frames:
+                # check if the user is pressed "Stop"
                 if stop_flags.get(self.file_id, False):
                     print(f"🛑 Stopped by user.")
                     break
-                    
+
+                # take the single current frame    
                 success, frame = cap.read()
                 if not success: break
                 
+                # create a copy of the original frame (it is a good practice)
                 annotated = frame.copy()
                 
-                # --- TRACKING ---
+                # --- TRACKING --- (the model analyzes the original frame, but modifies the copy )
+                # detection using the model
                 results = yolo_model.track(
                     frame, persist=True, verbose=False, 
                     conf=0.25, tracker="bytetrack.yaml", imgsz=640
                 )
                 
-                # --- LOGIC ---
+                # --- LOGIC --- 
+                # Update scores if it finds shots or baskets. 
                 self._process_detections(results, stats, frame_idx)
                 
                 # --- DRAWING LOGIC BASED ON MODE ---
@@ -347,20 +359,24 @@ class VideoProcessor:
                 # 3. HUD (Always visible in all modes)
                 Visualizer.draw_hud(annotated, stats, w, h)
                 
+                # Writes the modified frame to the new video file.
                 writer.write(annotated)
                 frame_idx += 1
                 
+                # every 30 frames the status is updated (and the progress bar)
                 if frame_idx % 30 == 0:
                     self._update_status("processing", frame_idx, max_frames, stats)
 
             if stop_flags.get(self.file_id, False):
                 self._update_status("stopped", frame_idx, max_frames, stats)
             else:
+                # create final screen and add it to the final video for 5 seconds
                 summary_frame = Visualizer.draw_final_screen(w, h, stats, frame_idx, fps)
                 for _ in range(int(fps * 5)): writer.write(summary_frame)
                 self._update_status("completed", frame_idx, max_frames, stats)
                 print(f"✅ Finished. Acc: {stats.accuracy:.1f}%")
 
+            # close the files
             cap.release()
             writer.release()
             if self.file_id in stop_flags: del stop_flags[self.file_id]
@@ -369,28 +385,38 @@ class VideoProcessor:
             print(f"❌ Error: {e}")
             processing_status[self.file_id] = {"status": "error", "message": str(e)}
 
+    # Used to understand what is happening in the game and update the score
     def _process_detections(self, results, stats, frame_idx):
+        # If the model didn't see anything in this frame (black or blank screen), exit immediately to save time.
         if not results[0].boxes: return
+        # Scroll through the list of all found objects
         for box in results[0].boxes:
             cls = int(box.cls[0])
             conf = float(box.conf[0])
-            if conf < Config.THRESHOLDS.get(cls, 0.3): continue
+            # Use instance-specific thresholds
+            if conf < self.thresholds.get(cls, 0.3): continue
             
+            # The model returns a rectangle. Here we calculate the exact center point of that rectangle. It's essential to know where the ball is flying.
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             center = ((x1+x2)//2, (y1+y2)//2)
             
+            # If the model sees the basket, it stores its position (last_known_basket_pos). This is necessary because if the ball goes in, we need to know where to draw the animation.
             if cls == 3: stats.last_known_basket_pos = center
+            # Player who shots
             elif cls == 4: stats.register_shot(frame_idx)
+            # Ball in the basket: It also passes the position (target_pos) so the graphics system will know where to draw the visual explosion.
             elif cls == 1:
                 target_pos = stats.last_known_basket_pos or center
                 stats.register_basket(frame_idx, target_pos)
 
+    # Used to show the human what the model sees. Draw the colored rectangles.
     def _draw_yolo_boxes(self, frame, results):
         if not results[0].boxes: return
         for box in results[0].boxes:
             cls = int(box.cls[0])
             conf = float(box.conf[0])
-            if conf < Config.THRESHOLDS.get(cls, 0.3): continue
+            # Use instance-specific thresholds
+            if conf < self.thresholds.get(cls, 0.3): continue
 
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             color = Config.COLORS.get(cls, (255,255,255))
@@ -399,6 +425,7 @@ class VideoProcessor:
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
+    # Used to update the status and the progress bar.
     def _update_status(self, status, current, total, stats):
         processing_status[self.file_id] = {
             "status": status,
@@ -410,7 +437,7 @@ class VideoProcessor:
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(title="Basketball AI Tracker")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
 @app.on_event("startup")
 def startup_event():
@@ -430,11 +457,23 @@ async def upload_video(file: UploadFile = File(...)):
     return {"file_id": file_id, "filename": file.filename}
 
 @app.post("/process/{file_id}")
-async def start_process(file_id: str, test_mode: bool = False, mode: ProcessingMode = ProcessingMode.FULL_TRACKING):
+async def start_process(file_id: str, test_mode: bool = False, mode: ProcessingMode = ProcessingMode.FULL_TRACKING, thresholds: str = None):
     input_files = list(Config.UPLOAD_DIR.glob(f"{file_id}.*"))
     if not input_files: raise HTTPException(404, "Video not found.")
     
-    processor = VideoProcessor(file_id, input_files[0], Config.PROCESSED_DIR / f"{file_id}_processed.mp4", test_mode, mode)
+    # Parse custom thresholds if provided
+    active_thresholds = Config.THRESHOLDS.copy()
+    if thresholds:
+        try:
+            custom_vals = json.loads(thresholds)
+            # Convert string keys to integers
+            for k, v in custom_vals.items():
+                active_thresholds[int(k)] = float(v)
+            print(f"⚙️ Using custom thresholds for {file_id}: {active_thresholds}")
+        except Exception as e:
+            print(f"⚠️ Failed to parse thresholds: {e}. Using defaults.")
+
+    processor = VideoProcessor(file_id, input_files[0], Config.PROCESSED_DIR / f"{file_id}_processed.mp4", test_mode, mode, active_thresholds)
     thread = threading.Thread(target=processor.run)
     thread.start()
     return {"status": "started", "file_id": file_id, "mode": mode}
