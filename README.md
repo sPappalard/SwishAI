@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="FE/public/logo.png" alt="SwishAI Logo" width="300">
+  <img src="FE/public/logo.png" alt="SwishAI Logo" width="200">
 </div>
 
 # 🏀 SwishAI - Basketball Shot Analysis & Tracking
@@ -256,9 +256,16 @@ The training script (`train_model.py`) uses specialized augmentation for sports 
 
 ### 🎥 Sample Output Video
 
-Check out a full example of SwishAI in action: [**View Sample Output Video**](https://github.com/sPappalard/SwishAI/blob/main/samples/output_example.mp4)
+Watch a full demonstration of SwishAI in action:
 
-> **Note**: To add the sample video to your repository, create a `samples` folder in the root directory and upload your example video as `output_example.mp4`.
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=mOU5vY94BHQ">
+    <img src="https://img.youtube.com/vi/mOU5vY94BHQ/maxresdefault.jpg" alt="SwishAI Demo Video" width="800">
+  </a>
+  <p><em>Click the image above to watch the demo on YouTube</em></p>
+</div>
+
+**[▶️ Watch on YouTube](https://www.youtube.com/watch?v=mOU5vY94BHQ)**
 
 ---
 
