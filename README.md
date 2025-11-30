@@ -259,13 +259,13 @@ The training script (`train_model.py`) uses specialized augmentation for sports 
 Watch a full demonstration of SwishAI in action:
 
 <div align="center">
-  <a href="https://www.youtube.com/watch?v=mOU5vY94BHQ">
-    <img src="https://img.youtube.com/vi/mOU5vY94BHQ/maxresdefault.jpg" alt="SwishAI Demo Video" width="800">
+  <a href="https://www.youtube.com/watch?v=jlCniC-61_w">
+    <img src="https://img.youtube.com/vi/jlCniC-61_w/maxresdefault.jpg" alt="SwishAI Demo Video" width="800">
   </a>
   <p><em>Click the image above to watch the demo on YouTube</em></p>
 </div>
 
-**[▶️ Watch on YouTube](https://www.youtube.com/watch?v=mOU5vY94BHQ)**
+**[▶️ Watch on YouTube](https://www.youtube.com/watch?v=jlCniC-61_w)**
 
 ---
 
