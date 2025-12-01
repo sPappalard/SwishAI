@@ -4,7 +4,7 @@
 
 # 🏀 SwishAI - Basketball Shot Analysis & Tracking
 
-SwishAI is a state-of-the-art Computer Vision application designed to analyze basketball shots from video footage automatically. Powered by YOLOv11 and a modern React + FastAPI stack, it tracks players, basketballs, and hoops in real-time, calculating shooting percentage and visualizing successful shots with dynamic overlays.
+SwishAI is a Computer Vision application designed to analyze basketball shots from video footage automatically. Powered by YOLOv11 and a modern React + FastAPI stack, it tracks players, basketballs, and hoops in real-time, calculating shooting percentage and visualizing successful shots with dynamic overlays.
 
 ---
 
@@ -30,17 +30,17 @@ SwishAI is a state-of-the-art Computer Vision application designed to analyze ba
 - **Smart Scoring System**: Automatically counts shots attempted vs. made to calculate real-time Field Goal Percentage (FG%).
 - **Visual FX**: Renders dynamic "pulse" animations and overlays when a basket is scored.
 - **Configurable AI**: Users can adjust Confidence Thresholds for each class via the UI to adapt to different lighting conditions.
-- **Processing Modes**:
+- **Processing Modes** - the video can be processed with 3 different modes:
   - **Full Tracking**: Bounding boxes + Visual Effects + HUD.
   - **Stats & Effects**: Clean view with only scoring effects and HUD.
   - **Stats Only**: Minimalist overlay.
-- **Performance Optimization**: Includes a "Test Mode" (processes only 15s) and auto-cleanup mechanisms to manage server storage.
+- **Performance Optimization**: Includes a "Test Mode" (processes only the first 15s) and auto-cleanup mechanisms to manage server storage.
 
 ---
 
 ## 🛠 Tech Stack
 
-### Artificial Intelligence
+### AI
 - **YOLOv11s** (Ultralytics): Latest SOTA object detection model
 - **PyTorch**: Deep learning framework
 - **OpenCV (cv2)**: Video processing and drawing logic
@@ -99,7 +99,7 @@ Before running the app, you need to train the model (or use pre-trained weights)
 
 **Configure Training**:
 - Ensure the dataset is extracted into `BE/basketball-detection-srfkd-1`
-- Check `train_model.py` config class:
+- Check `train_model.py` config class (the script is tailored for my hardware: GTX 1060 6GB - i7 6700k - 16gb ram):
 
 ```python
 DATASET_DIR = Path("basketball-detection-srfkd-1")
@@ -179,11 +179,106 @@ Client will run at `http://localhost:5173`.
 1. **Open the App**: Go to the local frontend URL.
 2. **Upload Video**: Click the upload area to select a basketball video (MP4, MOV, AVI).
 3. **Configure Settings** (Optional):
-   - **Processing Mode**: Choose between Full Tracking or Stats Only.
+   - **Processing Mode**: Choose between Full Tracking, Stats & Effects or Stats Only.
    - **Advanced Settings**: Click "Advanced" to tweak confidence thresholds for specific classes (e.g., lower "Ball" threshold for dark videos).
-   - **Test Mode**: Check "Test Mode" to process only the first 15 seconds.
+   - **Test Mode**: Check "Test Mode" to process only the first 15 seconds. Useful to check if the model works properly.
 4. **Start Analysis**: Click the Start Analysis button. You will see a real-time progress bar and stats updating as the backend processes the video.
 5. **Download**: Once complete, download the rendered video with overlays.
+
+---
+## 📊 Model Training & Performance
+
+### Dataset Information
+
+SwishAI uses a custom-trained YOLOv11s model trained on the **Basketball Detection Dataset** from Roboflow Universe.
+
+- **Dataset Source**: [Roboflow Universe - Basketball Detection](https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd)
+- **Dataset Size**: ~10,000 annotated images
+- **License**: CC BY 4.0
+- **Classes**: 5 (Ball, Ball in Basket, Player, Basket, Player Shooting)
+- **Training Date**: March 17, 2025
+
+### Training Configuration
+
+The model was trained using a custom training script (`train_model.py`) specifically optimized for consumer-grade hardware:
+
+**Hardware Specifications:**
+```
+- GPU: NVIDIA GTX 1060 6GB
+- CPU: Intel i7-6700K
+- RAM: 16GB DDR4
+- Training Duration: ~48 hours continuous
+```
+
+**Training Parameters:**
+- **Model**: YOLOv11s (small variant for efficiency)
+- **Epochs**: 200
+- **Batch Size**: 8 (optimized for 6GB VRAM)
+- **Image Size**: 640x640
+- **Optimizer**: AdamW
+- **Learning Rate**: 0.001 (with cosine decay)
+
+### Model Performance Metrics
+
+<div align="center">
+
+#### Training & Validation Loss Curves
+<img src="FE/public/results.png" alt="Training Results" width="900">
+
+#### Confusion Matrix
+<img src="FE/public/confusionMatrix.png" alt="Confusion Matrix" width="600">
+
+#### Normalized Confusion Matrix
+<img src="FE/public/normalizedMatrix.png" alt="Normalized Confusion Matrix" width="600">
+
+</div>
+
+**Key Performance Indicators** (Final Model - Epoch 200):
+- **mAP50**: 0.909 (Mean Average Precision at IoU 0.5)
+- **mAP50-95**: 0.623 (Mean Average Precision from IoU 0.5 to 0.95)
+- **Overall Precision**: 0.878
+- **Overall Recall**: 0.861
+
+**Per-Class Performance:**
+| Class | Precision | Recall | mAP50 |
+|-------|-----------|--------|-------|
+| Ball | 0.80 | 0.88 | 0.847 |
+| Ball in Basket | 0.51 | 0.36 | 0.932 |
+| Player | 0.86 | 0.85 | 0.928 |
+| Basket | 0.91 | 0.91 | 0.966 |
+| Player Shooting | 0.76 | 0.34 | 0.873 |
+
+### Precision-Recall Curves
+
+<div align="center">
+
+<img src="FE/public/PR_curve.png" alt="Precision-Recall Curve" width="700">
+
+<img src="FE/public/P_curve.png" alt="Precision-Confidence Curve" width="700">
+
+<img src="FE/public/R_curve.png" alt="Recall-Confidence Curve" width="700">
+
+<img src="FE/public/F1_curve.png" alt="F1-Confidence Curve" width="700">
+
+</div>
+
+### Training Script Details
+
+The `train_model.py` script includes:
+- **Hardware-specific optimizations** for GTX 1060 6GB (batch size, workers, memory management)
+- **Custom augmentation pipeline** tailored for basketball footage (HSV saturation, shear, mixup)
+- **Automatic validation split** (80/20 train/val)
+- **Early stopping** and checkpoint saving
+- **Mixed precision training** (FP16) for faster training on limited VRAM
+
+> **Note on Model Improvement**: The current model achieves strong performance for real-time basketball analysis. However, further improvements are possible through:
+> - Extended training (300+ epochs)
+> - Larger model variants (YOLOv11m or YOLOv11l)
+> - Additional data augmentation techniques
+> - Fine-tuning on specific court environments
+> - Ensemble methods or model fusion
+> 
+> Users with more powerful hardware (RTX 3080+, 24GB+ VRAM) can modify the training parameters in `train_model.py` to achieve higher accuracy.
 
 ---
 
@@ -262,7 +357,7 @@ Watch a full demonstration of SwishAI in action:
   <a href="https://www.youtube.com/watch?v=jlCniC-61_w">
     <img src="https://img.youtube.com/vi/jlCniC-61_w/maxresdefault.jpg" alt="SwishAI Demo Video" width="800">
   </a>
-  <p><em>Click the image above to watch the demo on YouTube</em></p>
+  <p><em>Click the image above to watch the full video output on YouTube</em></p>
 </div>
 
 **[▶️ Watch on YouTube](https://www.youtube.com/watch?v=jlCniC-61_w)**
@@ -293,4 +388,6 @@ Watch a full demonstration of SwishAI in action:
 }
 ```
 
-Made with ❤️ and Python.
+## License
+
+This project is licensed under the MIT License --->  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
