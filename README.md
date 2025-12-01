@@ -117,7 +117,7 @@ Watch a full demonstration of SwishAI in action:
 
 ## 🛠 Tech Stack
 
-### AI
+### Computer Vision & AI Core
 - **YOLOv11s** (Ultralytics): Latest SOTA object detection model
 - **PyTorch**: Deep learning framework
 - **OpenCV (cv2)**: Video processing and drawing logic
