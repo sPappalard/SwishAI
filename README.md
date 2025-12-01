@@ -11,16 +11,27 @@ SwishAI is a Computer Vision application designed to analyze basketball shots fr
 ## 📋 Table of Contents
 
 - [Key Features](#-key-features)
+- [Screenshots](#-screenshots)
+- [Usage Guide](#-usage-guide)
 - [Tech Stack](#-tech-stack)
 - [Project Architecture](#-project-architecture)
 - [Installation & Setup](#️-installation--setup)
-  - [Dataset & Model Training](#1-dataset--model-training)
-  - [Backend Setup](#2-backend-setup)
-  - [Frontend Setup](#3-frontend-setup)
-- [Usage Guide](#-usage-guide)
+  - [Prerequisites](#prerequisites)
+  - [Backend Setup](#1-backend-setup)
+  - [Frontend Setup](#2-frontend-setup)
+  - [Dataset & Model Training](#3-dataset--model-training)
 - [Technical Logic & AI](#-technical-logic--ai)
-- [Screenshots](#-screenshots)
+  - [Physics & Cooldowns](#physics--cooldowns)
+  - [Custom Augmentation Strategy](#custom-augmentation-strategy)
+  - [Detection Classes](#detection-classes)
+- [Model Training & Performance](#-model-training--performance)
+  - [Dataset Information](#dataset-information)
+  - [Training Configuration](#training-configuration)
+  - [Model Performance Metrics](#model-performance-metrics)
+  - [Precision-Recall Curves](#precision-recall-curves)
+  - [Training Script Details](#training-script-details)
 - [Credits](#-credits)
+- [License](#license)
 
 ---
 
@@ -35,6 +46,72 @@ SwishAI is a Computer Vision application designed to analyze basketball shots fr
   - **Stats & Effects**: Clean view with only scoring effects and HUD.
   - **Stats Only**: Minimalist overlay.
 - **Performance Optimization**: Includes a "Test Mode" (processes only the first 15s) and auto-cleanup mechanisms to manage server storage.
+
+---
+
+## 📸 Screenshots
+
+### Main Interface
+<div align="center">
+  <img src="FE/public/1.png" alt="Main Menu" width="800">
+  <p><em>Upload interface with processing mode selection</em></p>
+</div>
+
+### Advanced Model Settings
+<div align="center">
+  <img src="FE/public/2.png" alt="Advanced Settings" width="800">
+  <p><em>Fine-tune confidence thresholds for each detection class</em></p>
+</div>
+
+### Ready to Process
+<div align="center">
+  <img src="FE/public/4.png" alt="Video Loaded" width="800">
+  <p><em>Video uploaded and ready for analysis</em></p>
+</div>
+
+### Processing in Progress
+<div align="center">
+  <img src="FE/public/5.png" alt="Processing Progress" width="800">
+  <p><em>Real-time progress tracking with live statistics updates</em></p>
+</div>
+
+### Processing Complete
+<div align="center">
+  <img src="FE/public/6.png" alt="Processing Complete" width="800">
+  <p><em>Analysis finished - ready to download the processed video</em></p>
+</div>
+
+### Output Example
+<div align="center">
+  <img src="FE/public/7.png" alt="Video Output Example" width="800">
+  <p><em>Example of processed video with tracking overlays and statistics</em></p>
+</div>
+
+### 🎥 Sample Output Video
+
+Watch a full demonstration of SwishAI in action:
+
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=jlCniC-61_w">
+    <img src="https://img.youtube.com/vi/jlCniC-61_w/maxresdefault.jpg" alt="SwishAI Demo Video" width="800">
+  </a>
+  <p><em>Click the image above to watch the full video output on YouTube</em></p>
+</div>
+
+**[▶️ Watch on YouTube](https://www.youtube.com/watch?v=jlCniC-61_w)**
+
+---
+
+## 🚀 Usage Guide
+
+1. **Open the App**: Go to the local frontend URL.
+2. **Upload Video**: Click the upload area to select a basketball video (MP4, MOV, AVI).
+3. **Configure Settings** (Optional):
+   - **Processing Mode**: Choose between Full Tracking, Stats & Effects or Stats Only.
+   - **Advanced Settings**: Click "Advanced" to tweak confidence thresholds for specific classes (e.g., lower "Ball" threshold for dark videos).
+   - **Test Mode**: Check "Test Mode" to process only the first 15 seconds. Useful to check if the model works properly.
+4. **Start Analysis**: Click the Start Analysis button. You will see a real-time progress bar and stats updating as the backend processes the video.
+5. **Download**: Once complete, download the rendered video with overlays.
 
 ---
 
@@ -91,32 +168,7 @@ SwishAI/
 - Node.js 18+ & npm
 - NVIDIA GPU (Optional but highly recommended for training/inference)
 
-### 1. Dataset & Model Training
-
-Before running the app, you need to train the model (or use pre-trained weights).
-
-**Download Dataset**: Get the basketball detection dataset from [Roboflow Universe](https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd).
-
-**Configure Training**:
-- Ensure the dataset is extracted into `BE/basketball-detection-srfkd-1`
-- Check `train_model.py` config class (the script is tailored for my hardware: GTX 1060 6GB - i7 6700k - 16gb ram):
-
-```python
-DATASET_DIR = Path("basketball-detection-srfkd-1")
-EPOCHS = 200
-BATCH_SIZE = 8  # Adjust based on your VRAM
-```
-
-**Run Training**:
-
-```bash
-cd BE
-python train_model.py
-```
-
-This script handles auto-validation, GPU checks, and custom augmentation.
-
-### 2. Backend Setup
+### 1. Backend Setup
 
 Navigate to the backend directory:
 
@@ -150,7 +202,7 @@ python app.py
 
 Server will run at `http://localhost:8000`.
 
-### 3. Frontend Setup
+### 2. Frontend Setup
 
 Navigate to the frontend directory:
 
@@ -172,20 +224,62 @@ npm run dev
 
 Client will run at `http://localhost:5173`.
 
+### 3. Dataset & Model Training
+
+Before running the app, you need to train the model (or use pre-trained weights).
+
+**Download Dataset**: Get the basketball detection dataset from [Roboflow Universe](https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd).
+
+**Configure Training**:
+- Ensure the dataset is extracted into `BE/basketball-detection-srfkd-1`
+- Check `train_model.py` config class (the script is tailored for my hardware: GTX 1060 6GB - i7 6700k - 16gb ram):
+
+```python
+DATASET_DIR = Path("basketball-detection-srfkd-1")
+EPOCHS = 200
+BATCH_SIZE = 8  # Adjust based on your VRAM
+```
+
+**Run Training**:
+
+```bash
+cd BE
+python train_model.py
+```
+
+This script handles auto-validation, GPU checks, and custom augmentation.
+
 ---
 
-## 🚀 Usage Guide
+## 🧠 Technical Logic & AI
 
-1. **Open the App**: Go to the local frontend URL.
-2. **Upload Video**: Click the upload area to select a basketball video (MP4, MOV, AVI).
-3. **Configure Settings** (Optional):
-   - **Processing Mode**: Choose between Full Tracking, Stats & Effects or Stats Only.
-   - **Advanced Settings**: Click "Advanced" to tweak confidence thresholds for specific classes (e.g., lower "Ball" threshold for dark videos).
-   - **Test Mode**: Check "Test Mode" to process only the first 15 seconds. Useful to check if the model works properly.
-4. **Start Analysis**: Click the Start Analysis button. You will see a real-time progress bar and stats updating as the backend processes the video.
-5. **Download**: Once complete, download the rendered video with overlays.
+### Physics & Cooldowns
+
+To prevent double-counting, the system implements physics-based cooldown logic (`app.py`):
+
+- **Shot Cooldown (1.5s)**: Prevents the model from registering multiple shots for a single throwing motion.
+- **Basket Cooldown (2.0s)**: Ensures the ball swishing through the net isn't counted twice in consecutive frames.
+
+### Custom Augmentation Strategy
+
+The training script (`train_model.py`) uses specialized augmentation for sports footage:
+
+- **HSV Saturation (0.7)**: Helps detect orange balls in varied lighting.
+- **Shear (2.0°)**: Improves robustness against camera angles.
+- **Mixup (0.15)**: Helps separating players in crowded scenes.
+
+### Detection Classes
+
+| ID | Class Name       | Default Confidence |
+|----|------------------|--------------------|
+| 0  | Ball             | 0.60               |
+| 1  | Ball in Basket   | 0.25               |
+| 2  | Player           | 0.70               |
+| 3  | Basket           | 0.70               |
+| 4  | Player Shooting  | 0.77               |
 
 ---
+
 ## 📊 Model Training & Performance
 
 ### Dataset Information
@@ -282,88 +376,6 @@ The `train_model.py` script includes:
 
 ---
 
-## 🧠 Technical Logic & AI
-
-### Physics & Cooldowns
-
-To prevent double-counting, the system implements physics-based cooldown logic (`app.py`):
-
-- **Shot Cooldown (1.5s)**: Prevents the model from registering multiple shots for a single throwing motion.
-- **Basket Cooldown (2.0s)**: Ensures the ball swishing through the net isn't counted twice in consecutive frames.
-
-### Custom Augmentation Strategy
-
-The training script (`train_model.py`) uses specialized augmentation for sports footage:
-
-- **HSV Saturation (0.7)**: Helps detect orange balls in varied lighting.
-- **Shear (2.0°)**: Improves robustness against camera angles.
-- **Mixup (0.15)**: Helps separating players in crowded scenes.
-
-### Classes
-
-| ID | Class Name       | Default Confidence |
-|----|------------------|--------------------|
-| 0  | Ball             | 0.60               |
-| 1  | Ball in Basket   | 0.25               |
-| 2  | Player           | 0.70               |
-| 3  | Basket           | 0.70               |
-| 4  | Player Shooting  | 0.77               |
-
----
-
-## 📸 Screenshots
-
-### Main Interface
-<div align="center">
-  <img src="FE/public/1.png" alt="Main Menu" width="800">
-  <p><em>Upload interface with processing mode selection</em></p>
-</div>
-
-### Advanced Model Settings
-<div align="center">
-  <img src="FE/public/2.png" alt="Advanced Settings" width="800">
-  <p><em>Fine-tune confidence thresholds for each detection class</em></p>
-</div>
-
-### Ready to Process
-<div align="center">
-  <img src="FE/public/4.png" alt="Video Loaded" width="800">
-  <p><em>Video uploaded and ready for analysis</em></p>
-</div>
-
-### Processing in Progress
-<div align="center">
-  <img src="FE/public/5.png" alt="Processing Progress" width="800">
-  <p><em>Real-time progress tracking with live statistics updates</em></p>
-</div>
-
-### Processing Complete
-<div align="center">
-  <img src="FE/public/6.png" alt="Processing Complete" width="800">
-  <p><em>Analysis finished - ready to download the processed video</em></p>
-</div>
-
-### Output Example
-<div align="center">
-  <img src="FE/public/7.png" alt="Video Output Example" width="800">
-  <p><em>Example of processed video with tracking overlays and statistics</em></p>
-</div>
-
-### 🎥 Sample Output Video
-
-Watch a full demonstration of SwishAI in action:
-
-<div align="center">
-  <a href="https://www.youtube.com/watch?v=jlCniC-61_w">
-    <img src="https://img.youtube.com/vi/jlCniC-61_w/maxresdefault.jpg" alt="SwishAI Demo Video" width="800">
-  </a>
-  <p><em>Click the image above to watch the full video output on YouTube</em></p>
-</div>
-
-**[▶️ Watch on YouTube](https://www.youtube.com/watch?v=jlCniC-61_w)**
-
----
-
 ## 📜 Credits
 
 - **Developer**: sPappalard
@@ -388,6 +400,9 @@ Watch a full demonstration of SwishAI in action:
 }
 ```
 
+---
+
 ## License
 
-This project is licensed under the MIT License --->  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+This project is licensed under the MIT License - [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
