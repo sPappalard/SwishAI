@@ -377,7 +377,7 @@ The `train_model.py` script includes:
 - **Custom augmentation pipeline** tailored for basketball footage (HSV saturation, shear, mixup)
 - **Automatic validation split** (80/20 train/val)
 - **Early stopping** and checkpoint saving
-- **Mixed precision training** (FP16) for faster training on limited VRAM
+- **Mixed precision training** (FP16) for faster training on lied VRAM
 
 > **Note on Model Improvement**: The current model achieves strong performance for real-time basketball analysis. However, further improvements are possible through:
 > - Extended training (300+ epochs)
@@ -416,7 +416,24 @@ The `train_model.py` script includes:
 
 ---
 
-## License
+## 📄 License
 
-This project is licensed under the MIT License - [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+This project is released under the **Apache 2.0** license.
+
+Copyright (c) 2025 sPappalard.
+
+```
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+   
+    [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+
 
