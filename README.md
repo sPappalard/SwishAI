@@ -9,16 +9,15 @@ SwishAI is a Computer Vision application designed to analyze basketball shots fr
 ---
 
 ## Support my work
-If you enjoy this project, you can support me and helps me keep creating and maintaining open-source projects. Thank you! ☕
-
-<br>
-
-<p align="center">
-  <a href="https://buymeacoffee.com/sPappalard">
-    <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=tuonome&button_colour=5F7FFF&font_colour=ffffff&font_family=Inter&outline_colour=000000&coffee_colour=ffffff" />
+**If you find RotoAI useful, please consider supporting the development!** 💙
+  
+  <a href="https://www.buymeacoffee.com/sPappalard">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="180" />
   </a>
-</p>
+  
+</div>
 
+---
 
 
 
