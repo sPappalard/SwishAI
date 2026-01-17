@@ -417,22 +417,19 @@ The `train_model.py` script includes:
 
 ## 📄 License
 
-This project is released under the **Apache 2.0** license.
+This project is released under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+
+**Why AGPL-3.0?**
+This project integrates **Ultralytics YOLO**, which is licensed under AGPL-3.0. As a derivative work, RotoAI inherits this license to ensure full compliance with the open-source terms of its dependencies.
+
+**What this means for you:**
+- ✅ **Use:** You can use this software for personal, research, or commercial purposes.
+- ✅ **Modify:** You can modify the source code.
+- 🔄 **Share:** If you distribute this software or host it as a network service (SaaS), you **must** disclose the source code of your modified version under the same AGPL-3.0 license.
 
 Copyright (c) 2025 sPappalard.
 
-```
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-   
-    [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+---
 
 
 
