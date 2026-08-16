@@ -6,6 +6,9 @@
 
 SwishAI is a Computer Vision application designed to analyze basketball shots from video footage automatically. Powered by YOLOv11 and a modern React + FastAPI stack, it tracks players, basketballs, and hoops in real-time, calculating shooting percentage and visualizing successful shots with dynamic overlays.
 
+<!-- SwishAI -->
+> 📖 **[Read the full case study →](https://salvatorepappalardo.dev/en/projects/swishai)**
+> Design decisions, architecture and what I learned building this.
 ---
 
 ## Support my work
